@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 (2026-11-04)
+
+- fix: page buttons failed with "Forbidden origin" in real browsers. `Referrer-Policy: no-referrer` made Chromium browsers send `Origin: null` on our own forms. Now `same-origin`, and the cross-site check trusts `Sec-Fetch-Site: same-origin` for opaque origins
+- test: own-form POSTs (normal and `Origin: null`) pass; cross-site and opaque-without-metadata are refused
+
 ## 0.3.0 (2026-11-04)
 
 - feat: SharePoint check-out as the lock. `workspace_lock` checks files out before editing; colleagues see "Checked out to <you>" and cannot save. `workspace_push` uploads and checks in with a note shown in version history; files locked but unchanged are released (`discardCheckout`). `workspace_release` hands files back

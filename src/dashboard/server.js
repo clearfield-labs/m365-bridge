@@ -44,7 +44,7 @@ const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
   'X-Frame-Options': 'DENY',
   'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'no-referrer',
+  'Referrer-Policy': 'same-origin', // no-referrer makes browsers send "Origin: null" on our own forms
   'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self' https://login.microsoftonline.com",
 };
 function send(res, status, html) {
@@ -78,6 +78,20 @@ async function state() {
   };
 }
 
+/**
+ * True when a request comes from some other web page (CSRF). Browsers mark their requests with
+ * Sec-Fetch-Site and Origin; some send "Origin: null" for same-page forms, so trust Sec-Fetch-Site
+ * there. Programs like Claude Code send neither and are checked by their key instead.
+ */
+export function isCrossSite(req) {
+  const origin = req.headers.origin;
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') return true;
+  if (origin === 'null') return site !== 'same-origin';
+  if (origin && !ALLOWED_HOSTS.has(origin.replace(/^https?:\/\//, ''))) return true;
+  return false;
+}
+
 function bearerOk(req) {
   const token = loadConfig().mcpToken;
   const got = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1] || '';
@@ -88,8 +102,7 @@ function bearerOk(req) {
 async function handle(req, res) {
   if (!ALLOWED_HOSTS.has(req.headers.host)) return send(res, 403, 'Forbidden host');
   const url = new URL(req.url, DASHBOARD_URL);
-  const origin = req.headers.origin;
-  const foreignOrigin = origin && !ALLOWED_HOSTS.has(origin.replace(/^https?:\/\//, ''));
+  const foreignOrigin = isCrossSite(req);
 
   // Claude's connection. Browsers never get in: no web page can set the key, and any
   // cross-site Origin is refused before the key is even checked.

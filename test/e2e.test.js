@@ -322,6 +322,14 @@ test('background service: Claude Code connects over HTTP with its key; browsers 
   assert.equal((await fetch(url, { method: 'POST', headers: { ...headers, Authorization: 'Bearer wrong' }, body })).status, 401, 'wrong key');
   assert.equal((await fetch(url, { method: 'POST', headers: { ...headers, Authorization: `Bearer ${token}`, Origin: 'https://evil.example.com' }, body })).status, 403, 'web pages refused');
 
+  // Our own page's forms: some browsers send "Origin: null" with Sec-Fetch-Site same-origin.
+  const form = (headers) => fetch(`http://127.0.0.1:${PORT}/workspace/forget`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: 'localPath=%2Fnowhere' }).then((r) => r.status);
+  assert.equal(await form({ Origin: 'null', 'Sec-Fetch-Site': 'same-origin' }), 303, 'own form with Origin null');
+  assert.equal(await form({ Origin: `http://localhost:${PORT}`, 'Sec-Fetch-Site': 'same-origin' }), 303, 'own form');
+  assert.equal(await form({ Origin: 'null' }), 403, 'opaque origin without fetch metadata');
+  assert.equal(await form({ Origin: 'https://evil.example.com', 'Sec-Fetch-Site': 'cross-site' }), 403, 'other site');
+  assert.equal(await form({ 'Sec-Fetch-Site': 'cross-site' }), 403, 'other site without Origin');
+
   const page = await (await fetch(`http://127.0.0.1:${PORT}/`)).text();
   assert.match(page, /Checked out to you/);
   assert.match(page, /Synced folders/);
