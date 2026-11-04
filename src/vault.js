@@ -14,7 +14,7 @@ let storageLabel = null;
 
 function backend() {
   const forced = process.env.M365_BRIDGE_KEYSTORE;
-  if (forced) return forced;
+  if (forced) return forced; // empty string means: use the platform default
   if (process.platform === 'darwin') return 'keychain';
   if (process.platform === 'win32') return 'dpapi';
   return 'file';
@@ -25,6 +25,7 @@ function keychainGet() {
   try {
     const out = execFileSync('security', ['find-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w'], {
       stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 20000, // a locked or missing keychain can wait on a dialog; never hang forever
     });
     const hex = out.toString().trim();
     return /^[0-9a-f]{64}$/.test(hex) ? Buffer.from(hex, 'hex') : null;
@@ -36,12 +37,13 @@ function keychainSet(key) {
   execFileSync('security', ['-i'], {
     input: `add-generic-password -U -s ${SERVICE} -a ${ACCOUNT} -l "M365 Bridge" -w ${key.toString('hex')}\n`,
     stdio: ['pipe', 'ignore', 'pipe'],
+    timeout: 20000,
   });
   if (!keychainGet()) throw new Error('Keychain write did not stick');
 }
 export function keychainDelete() {
   try {
-    execFileSync('security', ['delete-generic-password', '-s', SERVICE, '-a', ACCOUNT], { stdio: 'ignore' });
+    execFileSync('security', ['delete-generic-password', '-s', SERVICE, '-a', ACCOUNT], { stdio: 'ignore', timeout: 20000 });
   } catch { /* not present */ }
 }
 
@@ -56,6 +58,7 @@ function dpapi(op, b64) {
     input: b64,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    timeout: 30000,
   }).toString().trim();
 }
 function dpapiGet() {

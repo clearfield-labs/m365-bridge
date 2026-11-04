@@ -97,6 +97,27 @@
 
   // Firm setup progress.
   var job = document.querySelector('[data-job][data-running]');
+  // People picker: search, unlicensed toggle, selected count, confirm before sending.
+  var filter = document.querySelector('[data-filter]');
+  var plist = document.querySelector('ul.people');
+  if (filter && plist) {
+    filter.addEventListener('input', function () {
+      var q = filter.value.trim().toLowerCase();
+      $$('li', plist).forEach(function (li) { li.classList.toggle('hide', !!q && li.getAttribute('data-name').indexOf(q) === -1); });
+    });
+  }
+  var unlic = document.querySelector('[data-show-unlic]');
+  if (unlic && plist) unlic.addEventListener('change', function () { plist.classList.toggle('show-unlic', unlic.checked); });
+  var count = document.querySelector('[data-count]');
+  if (count && plist) {
+    var upd = function () { count.textContent = $$('input[name=ids]:checked', plist).length + ' selected'; };
+    plist.addEventListener('change', upd);
+    upd();
+  }
+  $$('[data-confirm]').forEach(function (b) {
+    b.addEventListener('click', function (ev) { if (!window.confirm(b.getAttribute('data-confirm'))) ev.preventDefault(); });
+  });
+
   if (job) {
     var poll = setInterval(function () {
       fetch('/api/setup-job').then(function (r) { return r.json(); }).then(function (j) {

@@ -58,12 +58,13 @@ Re-running the installer updates M365 Bridge and restarts it.
 
 ## Rolling it out to a firm
 
-**The admin, once (about 2 minutes):**
-1. Install M365 Bridge.
-2. Open `http://localhost:4365/admin`, click **Sign in as admin and set up**, and sign in with a Microsoft 365 admin account.
-   - Choose **Everyone in the firm**, or **Only these people** for a pilot.
-   - Or ask Claude: "Set up M365 Bridge for my firm."
-3. Copy the setup code and send it to the team.
+**The admin, once (about 5 minutes):** open `http://localhost:4365/admin` and follow four steps:
+1. **Firm and permissions.** Name the firm and tick what Claude can reach (optional extras included).
+2. **Approve.** Sign in once with a Microsoft 365 admin account. On Microsoft's screen, leave "Consent on behalf of your organization" unticked.
+3. **Choose people.** Your team appears from the directory. Tick who gets Claude.
+4. **Invite.** M365 Bridge saves an email per person in your Outlook, each with their own setup code. Check one, then **Send all**.
+
+Afterwards the Admin page shows your setup and everyone's status. To add someone later, click **Refresh**, tick them, and click **Give access and invite**.
 
 **Each person, once (about 2 minutes):**
 1. Install M365 Bridge.

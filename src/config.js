@@ -15,6 +15,9 @@ const DEFAULTS = {
   extraScopes: '',
   workspaces: [], // { name, localPath, webUrl, driveId, itemId, lastPulled }
   mcpToken: '', // shared secret between Claude and the background server on this computer
+  loginHint: '', // from a personal setup code: pre-fills the Microsoft sign-in
+  team: null, // admin only: last loaded directory { people, restricted, fetchedAt }
+  invites: {}, // admin only: userId -> { at, sent }
 };
 
 export function loadConfig() {
@@ -60,8 +63,8 @@ export function validateIds(tenantId, clientId) {
 }
 
 /** A setup code bundles the firm's non-secret IDs so an admin can hand them to the team in one paste. */
-export function makeSetupCode(cfg) {
-  const payload = JSON.stringify({ t: cfg.tenantId, c: cfg.clientId, n: cfg.firmName, w: cfg.allowWrite, d: cfg.allowDelete, p: cfg.packs, x: cfg.extraScopes });
+export function makeSetupCode(cfg, { user } = {}) {
+  const payload = JSON.stringify({ t: cfg.tenantId, c: cfg.clientId, n: cfg.firmName, w: cfg.allowWrite, d: cfg.allowDelete, p: cfg.packs, x: cfg.extraScopes, ...(user ? { u: user } : {}) });
   return `M365B-${Buffer.from(payload).toString('base64url')}`;
 }
 
@@ -76,5 +79,6 @@ export function parseSetupCode(code) {
     allowDelete: data.d === true,
     packs: Array.isArray(data.p) ? data.p : DEFAULT_PACKS,
     extraScopes: data.x || '',
+    loginHint: data.u || '',
   };
 }

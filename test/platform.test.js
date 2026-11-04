@@ -24,6 +24,8 @@ const env = {
   M365_NO_BROWSER: '1',
 };
 delete env.M365_BRIDGE_KEYSTORE;
+// The Mac keychain needs the real home folder, so the install checks below use the key file there.
+if (process.platform === 'darwin') env.M365_BRIDGE_KEYSTORE = 'file';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function run(args, extra = {}) {
@@ -45,23 +47,31 @@ async function up(ms = 15000) {
 before(() => fs.mkdirSync(env.APPDATA, { recursive: true }));
 after(async () => {
   if (ON) await run(['uninstall']);
+  if (ON && process.platform === 'darwin') {
+    try { execFileSync(process.execPath, ['--input-type=module', '-e', `import('${pathToUrl(path.join(ROOT, 'src', 'vault.js'))}').then((v) => v.keychainDelete())`], { env: keyEnv, timeout: 30000 }); } catch { /* best effort */ }
+  }
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* Windows may hold a file briefly */ }
 });
+
+// The Mac keychain lives under the real home folder; point only the key-store check there.
+// The key's keychain entry is named after the throwaway data folder, so it never touches a real one.
+const keyEnv = process.platform === 'darwin' ? { ...env, HOME: os.homedir(), M365_BRIDGE_HOME: path.join(tmp, 'keytest'), M365_BRIDGE_KEYSTORE: '' } : env;
 
 test('OS key store encrypts, and a second process can decrypt', { skip: !ON }, async () => {
   const script = (code) => ['--input-type=module', '-e', `import('${pathToUrl(path.join(ROOT, 'src', 'config.js'))}').then(async (c) => { ${code} })`];
   const write = await new Promise((resolve) => {
-    const c = spawn(process.execPath, script(`c.updateConfig({ firmName: 'Platform Test LLP' }); const v = await import('${pathToUrl(path.join(ROOT, 'src', 'vault.js'))}'); console.log(v.keyStorage());`), { env });
+    const c = spawn(process.execPath, script(`c.updateConfig({ firmName: 'Platform Test LLP' }); const v = await import('${pathToUrl(path.join(ROOT, 'src', 'vault.js'))}'); console.log(v.keyStorage());`), { env: keyEnv });
     let o = ''; c.stdout.on('data', (d) => { o += d; }); c.stderr.on('data', (d) => { o += d; }); c.on('close', () => resolve(o.trim()));
   });
   console.log('key storage:', write);
   if (process.platform === 'win32') assert.equal(write, 'Windows DPAPI');
+  if (process.platform === 'darwin') assert.equal(write, 'macOS Keychain');
   const read = await new Promise((resolve) => {
-    const c = spawn(process.execPath, script('console.log(c.loadConfig().firmName)'), { env });
+    const c = spawn(process.execPath, script('console.log(c.loadConfig().firmName)'), { env: keyEnv });
     let o = ''; c.stdout.on('data', (d) => { o += d; }); c.on('close', () => resolve(o.trim()));
   });
   assert.equal(read, 'Platform Test LLP');
-  assert.doesNotMatch(fs.readFileSync(path.join(env.M365_BRIDGE_HOME, 'config.enc'), 'utf8'), /Platform Test/);
+  assert.doesNotMatch(fs.readFileSync(path.join(keyEnv.M365_BRIDGE_HOME, 'config.enc'), 'utf8'), /Platform Test/);
 });
 
 test('install: starts in the background, connects Claude, adds the hook', { skip: !ON }, async () => {
@@ -81,7 +91,7 @@ test('the hook command launches from the shells Claude Code uses, and exits fast
   const settings = JSON.parse(fs.readFileSync(path.join(HOME, '.claude', 'settings.json'), 'utf8'));
   const cmd = settings.hooks.PreToolUse.find((m) => m.matcher.includes('Edit')).hooks[0].command;
   const input = JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: path.join(tmp, 'outside.txt') }, cwd: tmp });
-  const shells = process.platform === 'win32' ? [['bash', ['-c', cmd]], ['cmd.exe', ['/d', '/s', '/c', cmd]]] : [['/bin/sh', ['-c', cmd]]];
+  const shells = process.platform === 'win32' ? [['bash', ['-c', cmd]], ['cmd.exe', ['/d', '/s', '/c', `"${cmd}"`]]] : [['/bin/sh', ['-c', cmd]]];
   for (const [sh, args] of shells) {
     const t = Date.now();
     const r = await new Promise((resolve) => {

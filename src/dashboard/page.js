@@ -2,12 +2,14 @@
 import os from 'node:os';
 import { PACKS, scopesFor } from '../scopes.js';
 import { REDIRECT_URI } from '../paths.js';
+import { renderInvite, DEFAULT_SUBJECT, DEFAULT_MESSAGE } from '../provision.js';
 
 const e = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const tidy = (p) => (p && p.startsWith(os.homedir()) ? `~${p.slice(os.homedir().length)}` : p);
 
 // Fluent-style 20px line icons.
 const P = {
+  person: '<circle cx="10" cy="7" r="3"/><path d="M4 17a6 6 0 0 1 12 0"/>',
   check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
   folder: '<path d="M2.5 6A1.5 1.5 0 0 1 4 4.5h3.6l1.6 1.6h6.8A1.5 1.5 0 0 1 17.5 7.6V14.5A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z"/>',
   file: '<path d="M5.5 2.5h6l4 4v10a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z"/><path d="M11.5 2.5v4h4"/>',
@@ -178,50 +180,117 @@ ${setup(s)}${ready ? held(s) + folders(s) + prompts() : ''}${activity(s)}`;
 // ---------------------------------------------------------------------------
 // Admin
 
-function autoSetup(s) {
-  const j = s.job;
-  const again = j?.running
-    ? `<p class="again"><span>Didn't see the Microsoft tab?</span> <a href="${e(j.signInUrl || '#')}" target="_blank" rel="noopener" data-signin${j.signInUrl ? '' : ' hidden'}>Open sign-in again</a>${form('/admin/cancel', '<button class="link" type="submit">Cancel</button>', { cls: 'inline-form' })}</p>`
-    : '';
-  const progress = j
-    ? `<div class="progress" data-job${j.running ? ' data-running' : ''}><ul>${j.steps.map((x) => `<li>${icon('check')}<span>${e(x.text)}</span></li>`).join('')}${j.running ? '<li class="now"><span class="spin"></span><span>Working…</span></li>' : ''}</ul>${again}${j.error ? `<p class="bad">${icon('warn')}${e(j.error)}</p>` : ''}${j.done ? `<p class="good">${icon('check')}Done. Share the setup code below with your team.</p>` : ''}</div>`
-    : '';
-  const o = j?.options || {};
-  const selected = o.access === 'selected';
-  return `<section class="card" id="setup"><div class="card-h"><h2>${icon('admin')}Set up your firm</h2>${s.configured ? '<span class="pill ok">Done</span>' : ''}</div>
-<div class="pad"><p>Sign in with a Microsoft 365 admin account. M365 Bridge creates its app in Entra and approves it for the firm. There is nothing to copy and no secret.</p>
-${progress}
-${form('/admin/auto', `<label class="lbl-f" for="fn">Firm name</label><input class="input short" id="fn" name="firmName" value="${e(o.firmName || s.cfg.firmName)}" placeholder="Smith &amp; Partners LLP">
-<fieldset class="choice"><legend class="lbl-f">Who can use it</legend>
-<label><input type="radio" name="access" value="everyone"${selected ? '' : ' checked'}><span><b>Everyone in the firm</b><small>Each person only sees their own files and email.</small></span></label>
-<label><input type="radio" name="access" value="selected"${selected ? ' checked' : ''}><span><b>Only these people</b><small>Start small. Run this again later to add more.</small></span></label>
-<textarea class="input" name="people" rows="2" placeholder="jeremy@firm.com, maria@firm.com">${e((o.people || []).join(', '))}</textarea></fieldset>
-<button class="btn primary" type="submit"${j?.running ? ' disabled' : ''}>${s.configured ? 'Run setup again' : 'Sign in as admin and set up'}</button>`, { busy: 'Opening Microsoft sign-in…', back: 'admin' })}</div></section>`;
+const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return ''; } };
+
+function stepper(current) {
+  const names = ['Firm and permissions', 'Approve', 'Choose people', 'Invite'];
+  return `<ol class="stepper">${names.map((n, i) => {
+    const k = i + 1;
+    const cls = k < current ? 'done' : k === current ? 'now' : '';
+    return `<li class="${cls}"><span class="num">${k < current ? icon('check') : k}</span><span>${n}</span></li>`;
+  }).join('')}</ol>`;
 }
 
-function code(s) {
-  if (!s.setupCode) return '';
-  return `<section class="card"><div class="card-h"><h2>${icon('key')}Setup code for your team</h2></div><div class="pad">
-<p>Send this to everyone who will use Claude. They paste it into M365 Bridge, or tell Claude <q>set up M365 with this code</q>. It holds no secret, only your firm's IDs and settings.</p>
-${copyBox(s.setupCode, 'Copy code')}
-<dl class="facts"><dt>Tenant ID</dt><dd><code>${e(s.cfg.tenantId)}</code></dd><dt>Client ID</dt><dd><code>${e(s.cfg.clientId)}</code></dd></dl></div></section>`;
+function packBoxes(cfg, optional) {
+  return Object.entries(PACKS)
+    .filter(([, p]) => !!p.optional === optional)
+    .map(([k, p]) => `<label class="check"><input type="checkbox" name="pack_${k}"${k === 'files' || (cfg.packs || []).includes(k) ? ' checked' : ''}${p.always ? ' disabled' : ''}><span>${e(p.label)}</span></label>`)
+    .join('');
 }
 
-function settings(s) {
+function permissionsStep(s) {
   const cfg = s.cfg;
-  const box = ([k, p]) => `<label class="check"><input type="checkbox" name="pack_${k}"${k === 'files' || (cfg.packs || []).includes(k) ? ' checked' : ''}${p.always ? ' disabled' : ''}><span>${e(p.label)}</span></label>`;
-  const packs = Object.entries(PACKS).filter(([, p]) => !p.optional).map(box).join('');
-  const optional = Object.entries(PACKS).filter(([, p]) => p.optional).map(box).join('');
-  return `<details class="card"><summary class="card-h"><h2>${icon('shield')}Permissions</h2><span class="muted small">${scopesFor(cfg).length} Microsoft permissions</span></summary><div class="pad">
-${form('/settings', `<label class="lbl-f" for="fn2">Firm name</label><input class="input short" id="fn2" name="firmName" value="${e(cfg.firmName)}">
-<p class="lbl-f">What Claude can reach</p><div class="checks">${packs}</div>
-<p class="lbl-f">Optional</p><div class="checks">${optional}</div>
+  return `<section class="card"><div class="card-h"><h2>${icon('shield')}What should Claude be able to reach?</h2></div><div class="pad">
+${form('/admin/start', `<label class="lbl-f" for="fn">Firm name</label><input class="input short" id="fn" name="firmName" value="${e(cfg.firmName)}" placeholder="Smith &amp; Partners LLP">
+<p class="lbl-f">Included</p><div class="checks">${packBoxes(cfg, false)}</div>
+<details class="more"><summary>Optional extras</summary><div class="checks">${packBoxes(cfg, true)}</div>
+<label class="lbl-f" for="xs">Other Microsoft Graph permissions</label><input class="input mono" id="xs" name="extraScopes" value="${e(cfg.extraScopes)}" placeholder="Bookings.Read.All"></details>
 <p class="lbl-f">What Claude can do</p><div class="checks">
 <label class="check"><input type="checkbox" name="allowWrite"${cfg.allowWrite ? ' checked' : ''}><span>Edit and upload files, check files out, draft email</span></label>
 <label class="check"><input type="checkbox" name="allowDelete"${cfg.allowDelete ? ' checked' : ''}><span>Delete through Microsoft Graph (off is safer)</span></label></div>
-<label class="lbl-f" for="xs">Extra Microsoft Graph permissions <span class="muted">(optional)</span></label><input class="input mono" id="xs" name="extraScopes" value="${e(cfg.extraScopes)}" placeholder="Bookings.Read.All">
-<div class="row"><button class="btn primary" type="submit">Save</button>${s.consentUrl ? `<a class="btn" href="${e(s.consentUrl)}">Approve for the firm again</a>` : ''}</div>`, { back: 'admin' })}
-<p class="muted small">After changing permissions, run setup again or approve again, then send the team the new setup code.</p></div></details>`;
+<p class="note">Next, you sign in once with a Microsoft 365 admin account. On Microsoft's screen, leave <b>Consent on behalf of your organization</b> unticked, then click Accept.</p>
+<div class="row"><button class="btn primary" type="submit">${MS}Continue and approve with Microsoft</button>${s.configured ? form('/admin/back', '<button class="btn" type="submit">Cancel</button>', { cls: 'inline-form' }) : ''}</div>`, { busy: 'Opening Microsoft sign-in…' })}</div></section>`;
+}
+
+function progressCard(s, title) {
+  const j = s.job;
+  const again = j.running
+    ? `<div class="again"><span>Didn't see the Microsoft tab?</span> <a href="${e(j.signInUrl || '#')}" target="_blank" rel="noopener" data-signin${j.signInUrl ? '' : ' hidden'}>Open sign-in again</a>${form('/admin/cancel', '<button class="link" type="submit">Cancel</button>', { cls: 'inline-form' })}</div>`
+    : '';
+  return `<section class="card"><div class="card-h"><h2>${icon('admin')}${title}</h2></div><div class="pad">
+<div class="progress" data-job${j.running ? ' data-running' : ''}><ul>${j.steps.map((x) => `<li>${icon('check')}<span>${e(x.text)}</span></li>`).join('')}${j.running ? '<li class="now"><span class="spin"></span><span>Working…</span></li>' : ''}</ul>${again}${j.error ? `<p class="bad">${icon('warn')}${e(j.error)}</p>` : ''}</div>
+${j.error ? form('/admin/back', '<button class="btn" type="submit">Back</button>') : ''}</div></section>`;
+}
+
+function overview(s) {
+  const cfg = s.cfg;
+  const packs = Object.entries(PACKS).filter(([k]) => k === 'files' || (cfg.packs || []).includes(k)).map(([, p]) => `<span class="pill">${e(p.label.replace(/ \(.*\)$/, ''))}</span>`).join('');
+  const restricted = cfg.team ? cfg.team.restricted : null;
+  return `<section class="card"><div class="card-h"><h2>${icon('check', 'i ok')}${e(cfg.firmName || 'Your firm')} is set up</h2>${form('/admin/edit', '<button class="btn small" type="submit">Change permissions</button>')}</div><div class="pad">
+<dl class="facts"><dt>Claude can reach</dt><dd class="chips">${packs}</dd>
+<dt>Claude can</dt><dd>${cfg.allowWrite ? 'Read and edit, check files out, draft email' : 'Read only'}${cfg.allowDelete ? ', delete' : ''}</dd>
+<dt>Who can use it</dt><dd>${restricted === null ? 'Not loaded yet' : restricted ? 'Only people you give access to' : 'Everyone in the firm'}</dd>
+<dt>Setup code</dt><dd>${copyBox(s.setupCode, 'Copy')}<small class="muted">The same code for anyone. Invitations below give each person their own.</small></dd></dl></div></section>`;
+}
+
+function people(s) {
+  const team = s.cfg.team;
+  const signedIn = !!s.adminSession;
+  const busy = s.job?.running;
+  const signInBar = signedIn
+    ? `<div class="bar-info">${icon('check', 'i ok')}Signed in as admin (${e(s.adminSession.me.userPrincipalName)}). ${form('/admin/refresh', '<button class="link" type="submit">Refresh list</button>', { cls: 'inline-form', busy: 'Refreshing…' })}</div>`
+    : busy ? '' : `<div class="bar-info">${icon('key')}To refresh the list or give someone access, sign in as admin. ${form('/admin/signin', '<button class="link" type="submit">Sign in as admin</button>', { cls: 'inline-form', busy: 'Opening…' })}</div>`;
+  if (!team?.people?.length) {
+    return `<section class="card" id="people"><div class="card-h"><h2>${icon('person')}People</h2></div>${signInBar}<p class="empty">Your team appears here after you sign in as admin.</p></section>`;
+  }
+  const invites = s.cfg.invites || {};
+  const rows = team.people.map((p) => {
+    const inv = invites[p.id];
+    const status = [
+      p.isAdmin ? '<span class="pill">You</span>' : '',
+      p.hasAccess ? '<span class="pill ok">Has access</span>' : '',
+      inv ? `<span class="pill ${inv.sent ? 'info' : ''}">${inv.sent ? 'Invited' : 'Draft saved'} ${fmtDate(inv.at)}</span>` : '',
+    ].join('');
+    return `<li class="${p.licensed ? '' : 'unlic'}" data-name="${e(`${p.name} ${p.email} ${p.title}`.toLowerCase())}"><label class="person"><input type="checkbox" name="ids" value="${e(p.id)}"><span class="avatar">${e(initials({ name: p.name }))}</span><span class="who-p"><b>${e(p.name)}</b><small>${e(p.email)}${p.title ? ` · ${e(p.title)}` : ''}</small></span><span class="st">${status}</span></label></li>`;
+  });
+  const withAccess = team.people.filter((p) => p.hasAccess).length;
+  const unlic = team.people.filter((p) => !p.licensed).length;
+  return `<section class="card" id="people"><div class="card-h"><h2>${icon('person')}People</h2><span class="muted small">${withAccess} with access · updated ${fmtDate(team.fetchedAt)}</span></div>
+${signInBar}
+<form method="post" action="/admin/access" data-busy="Working…" class="people-form">
+<div class="people-tools"><input class="input" type="search" placeholder="Search by name, email or role" data-filter>${unlic ? `<label class="check small"><input type="checkbox" data-show-unlic><span>Show ${unlic} accounts without a licence (shared mailboxes, rooms)</span></label>` : ''}</div>
+<ul class="people">${rows.join('')}</ul>
+<div class="people-foot"><label class="check"><input type="checkbox" name="restricted"${team.restricted !== false ? ' checked' : ''}><span>Only the people I give access to can use it</span></label>
+<span class="grow"></span><span class="muted small" data-count>0 selected</span>
+<button class="btn" type="submit" formaction="/admin/invite"${signedIn ? '' : ' disabled'} title="For people who already have access">Invite only</button>
+<button class="btn primary" type="submit"${signedIn ? '' : ' disabled'}>Give access and invite</button></div></form></section>`;
+}
+
+function invite(s) {
+  const ids = s.wizard.inviteIds;
+  if (!ids) return '';
+  const team = s.cfg.team?.people || [];
+  const chosen = team.filter((p) => ids.includes(p.id));
+  if (!chosen.length) return '';
+  const names = chosen.map((p) => e(p.name)).join(', ');
+  if (s.wizard.drafts) {
+    const d = s.wizard.drafts;
+    const rows = d.map((x) => `<li><span><b>${e(x.name)}</b> <small class="muted">${e(x.to)}</small></span>${x.sent ? '<span class="pill ok">Sent</span>' : x.webLink ? `<a href="${e(x.webLink)}" target="_blank" rel="noopener">Open in Outlook</a>` : ''}</li>`).join('');
+    return `<section class="card" id="invite"><div class="card-h"><h2>${icon('chat')}Invitations saved in your Outlook</h2></div><div class="pad">
+<p>${d.length === 1 ? 'One draft is' : `${d.length} drafts are`} waiting in your Drafts folder. Open one to check it, then send them all from here or from Outlook.</p>
+<ul class="drafts">${rows}</ul>
+<div class="row">${form('/admin/send', `<button class="btn primary" type="submit" data-confirm="Send ${d.length} invitation${d.length === 1 ? '' : 's'} from your Outlook now?">Send all ${d.length}</button>`, { busy: 'Sending…', cls: 'inline-form' })}${form('/admin/back', '<button class="btn" type="submit">Done, I\'ll send them from Outlook</button>', { cls: 'inline-form' })}</div></div></section>`;
+  }
+  const subject = s.wizard.subject || DEFAULT_SUBJECT;
+  const message = s.wizard.message || DEFAULT_MESSAGE;
+  const preview = renderInvite({ subject, message, person: chosen[0], cfg: s.cfg, adminName: s.adminSession?.me?.displayName || '' });
+  return `<section class="card" id="invite"><div class="card-h"><h2>${icon('chat')}Invite ${chosen.length === 1 ? e(chosen[0].name) : `${chosen.length} people`}</h2></div><div class="pad">
+<p class="muted">${names}. Each person gets an email from your Outlook with their own setup code. Nothing is sent until you say so.</p>
+${form('/admin/drafts', `<label class="lbl-f" for="sj">Subject</label><input class="input" id="sj" name="subject" value="${e(subject)}">
+<label class="lbl-f" for="mg">Message <span class="muted">({first_name} and {setup_code} are filled in for each person)</span></label><textarea class="input mono" id="mg" name="message" rows="14">${e(message)}</textarea>
+<details class="more"><summary>Preview for ${e(chosen[0].name)}</summary><div class="preview"><p class="lbl-f">${e(preview.subject)}</p>${preview.html}</div></details>
+<div class="row"><button class="btn primary" type="submit"${s.adminSession ? '' : ' disabled'}>Save ${chosen.length === 1 ? 'draft' : `${chosen.length} drafts`} in my Outlook</button></div>`, { busy: 'Saving drafts…' })}
+${form('/admin/back', '<button class="link" type="submit">Cancel</button>')}</div></section>`;
 }
 
 function manual(s) {
@@ -248,8 +317,22 @@ function computer(s) {
 }
 
 function admin(s) {
-  return `<div class="head"><h1>Firm setup</h1><p>For the Microsoft 365 admin. Done once for the whole firm.</p></div>
-${autoSetup(s)}${code(s)}${settings(s)}${manual(s)}${computer(s)}`;
+  const j = s.job;
+  const head = (t, sub) => `<div class="head"><h1>${t}</h1><p>${sub}</p></div>`;
+  const setupJob = j && j.mode === 'setup' && (j.running || j.error);
+  if (!s.configured || s.wizard.editing || setupJob) {
+    const step = setupJob ? 2 : 1;
+    return `${head('Set up your firm', 'Four short steps. You approve once, then choose who gets Claude.')}${stepper(step)}
+${step === 1 ? permissionsStep(s) : progressCard(s, 'Approving with Microsoft')}${manual(s)}${computer(s)}`;
+  }
+  const firstRun = !Object.values(s.cfg.invites || {}).some((x) => x.sent);
+  const signinJob = j && j.mode === 'signin' && (j.running || j.error) ? progressCard(s, 'Signing in as admin') : '';
+  if (firstRun) {
+    return `${head('Set up your firm', 'Approved. Now choose who gets Claude, and invite them.')}${stepper(s.wizard.inviteIds ? 4 : 3)}
+${signinJob}${invite(s)}${people(s)}${overview(s)}${computer(s)}`;
+  }
+  return `${head('Firm setup', 'Your configuration and who can use Claude with Microsoft 365.')}
+${signinJob}${invite(s)}${overview(s)}${people(s)}${manual(s)}${computer(s)}`;
 }
 
 export function renderPage(s, flash, view = 'home') {

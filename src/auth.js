@@ -103,7 +103,7 @@ export async function startBrowserSignIn() {
     codeChallenge: challenge,
     codeChallengeMethod: 'S256',
     state,
-    prompt: 'select_account',
+    ...(cfg.loginHint ? { loginHint: cfg.loginHint } : { prompt: 'select_account' }),
   });
   return url;
 }

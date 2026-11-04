@@ -65,11 +65,11 @@ function friendly(status, code, message) {
   return `${code}: ${message}`;
 }
 
-export async function graphAll(path, max = 5000) {
+export async function graphAll(path, max = 5000, opts = {}) {
   const out = [];
   let next = path;
   while (next && out.length < max) {
-    const page = await graph(next);
+    const page = await graph(next, opts);
     out.push(...(page.value || []));
     next = page['@odata.nextLink'] || null;
   }

@@ -25,6 +25,31 @@ export { openBrowser };
 const VERSION = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
 const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
 let flash = null; // one-shot message shown after a redirect
+// Admin flow state (memory only): which step, who is being invited, drafts awaiting send.
+const wizard = { editing: false, inviteIds: null, subject: null, message: null, drafts: null };
+
+async function refreshTeam() {
+  const cfg = loadConfig();
+  const t = await provision.listPeople(cfg.clientId);
+  updateConfig({ team: { ...t, fetchedAt: new Date().toISOString() } });
+  return t;
+}
+const selectedPeople = (ids) => {
+  const team = loadConfig().team?.people || [];
+  const set = new Set(ids);
+  return team.filter((p) => set.has(p.id));
+};
+
+/** Form fields; a repeated field (checkbox lists) becomes an array. */
+function parseForm(raw) {
+  const out = {};
+  for (const [k, v] of new URLSearchParams(raw)) {
+    if (k in out) out[k] = [].concat(out[k], v);
+    else out[k] = v;
+  }
+  return out;
+}
+const list = (v) => (v == null ? [] : [].concat(v));
 
 function readRaw(req) {
   return new Promise((resolve, reject) => {
@@ -74,7 +99,9 @@ async function state() {
     held: ws.heldFiles(),
     workspacesRoot: WORKSPACES_ROOT,
     audit: recentAudit(12),
-    job: provision.job ? { running: provision.job.running, steps: provision.job.steps, error: provision.job.error, done: !!provision.job.result, signInUrl: provision.job.signInUrl, options: provision.job.options } : null,
+    job: provision.job ? { running: provision.job.running, steps: provision.job.steps, error: provision.job.error, done: !!provision.job.result, signInUrl: provision.job.signInUrl, mode: provision.job.mode } : null,
+    adminSession: provision.adminSession(),
+    wizard,
   };
 }
 
@@ -123,7 +150,7 @@ async function handle(req, res) {
       sendJson(res, 200, { ok: true });
       return setTimeout(() => process.exit(0), 100);
     }
-    const body = Object.fromEntries(new URLSearchParams(await readRaw(req)));
+    const body = parseForm(await readRaw(req));
     const back = body.back === 'admin' ? '/admin' : '/';
     try {
       return await post(url.pathname, body, res, back);
@@ -173,7 +200,7 @@ async function handle(req, res) {
     }
     case '/api/setup-job': {
       const j = provision.job;
-      return sendJson(res, 200, { data: j ? { running: j.running, steps: j.steps.map((x) => x.text), error: j.error, done: !!j.result, signInUrl: j.signInUrl } : null });
+      return sendJson(res, 200, { data: j ? { running: j.running, steps: j.steps.map((x) => x.text), error: j.error, done: !!j.result || !!j.signedIn, signInUrl: j.signInUrl } : null });
     }
     case '/assets/app.css':
     case '/assets/app.js':
@@ -219,12 +246,92 @@ async function post(route, body, res, back) {
       await applyFirm({ tenantId: cfg.tenantId, clientId: cfg.clientId, ...patch });
       return go(res, 'ok', 'Settings saved. If you changed permissions, run setup again so Microsoft allows them, then send the team the new setup code.', '/admin');
     }
-    case '/admin/auto': {
-      const people = String(body.people || '').split(/[\s,;]+/).filter((x) => x.includes('@'));
-      if (body.access === 'selected' && !people.length) throw new Error('List at least one email address, or choose "Everyone in the firm".');
-      const j = startProvision({ firmName: body.firmName?.trim(), access: body.access === 'selected' ? 'selected' : 'everyone', people, cfg: loadConfig() });
-      j.promise.then((r) => r && !j.cancelled && applyFirm({ tenantId: r.tenantId, clientId: r.clientId, firmName: r.firmName })).catch(() => {});
-      return redirect(res, '/admin#setup');
+    case '/admin/start': {
+      // Step 1 -> 2: save the chosen permissions, then one admin approval for exactly those.
+      const cfg = loadConfig();
+      updateConfig({
+        firmName: body.firmName?.trim() || cfg.firmName,
+        allowWrite: body.allowWrite === 'on',
+        allowDelete: body.allowDelete === 'on',
+        packs: Object.keys(PACKS).filter((k) => k !== 'files' && body[`pack_${k}`] === 'on'),
+        extraScopes: parseExtraScopes(body.extraScopes).join(' '),
+      });
+      wizard.editing = false;
+      const j = startProvision({
+        cfg: loadConfig(),
+        firmName: body.firmName?.trim(),
+        onDone: async (r) => {
+          await applyFirm({ tenantId: r.tenantId, clientId: r.clientId, firmName: r.firmName });
+          await refreshTeam().catch(() => {});
+        },
+      });
+      j.mode = 'setup';
+      return redirect(res, '/admin');
+    }
+    case '/admin/signin': {
+      // Admin sign-in only (to refresh the team or add people later). Changes nothing by itself.
+      const j = provision.startSignIn({ onDone: () => refreshTeam().catch(() => {}) });
+      j.mode = 'signin';
+      return redirect(res, '/admin');
+    }
+    case '/admin/edit':
+      wizard.editing = true;
+      return redirect(res, '/admin');
+    case '/admin/back':
+      wizard.editing = false;
+      wizard.inviteIds = null;
+      wizard.drafts = null;
+      return redirect(res, '/admin');
+    case '/admin/refresh': {
+      if (!provision.adminSession()) throw new Error('Sign in as admin to refresh the list.');
+      const t = await refreshTeam();
+      return go(res, 'ok', `Loaded ${t.people.length} people from Microsoft 365.`, '/admin#people');
+    }
+    case '/admin/access': {
+      const ids = list(body.ids);
+      if (!ids.length) throw new Error('Tick at least one person.');
+      if (!provision.adminSession()) throw new Error('Sign in as admin first.');
+      const cfg = loadConfig();
+      const restricted = body.restricted === 'on';
+      const r = await provision.grantAccess({ appId: cfg.clientId, ids, restricted });
+      await refreshTeam().catch(() => {});
+      wizard.inviteIds = ids;
+      wizard.drafts = null;
+      flash = { kind: 'ok', text: `${r.added ? `Gave access to ${plural(r.added, 'person', 'people')}.` : 'They already had access.'} Now send them their setup codes.` };
+      return redirect(res, '/admin#invite');
+    }
+    case '/admin/invite': {
+      // Skip straight to inviting (for people who already have access).
+      wizard.inviteIds = list(body.ids);
+      wizard.drafts = null;
+      return redirect(res, '/admin#invite');
+    }
+    case '/admin/drafts': {
+      if (!provision.adminSession()) throw new Error('Sign in as admin first.');
+      const people = selectedPeople(wizard.inviteIds || []);
+      if (!people.length) throw new Error('Nobody selected to invite.');
+      wizard.subject = body.subject || provision.DEFAULT_SUBJECT;
+      wizard.message = body.message || provision.DEFAULT_MESSAGE;
+      wizard.drafts = await provision.draftInvites({ people, subject: wizard.subject, message: wizard.message, cfg: loadConfig() });
+      const invites = { ...(loadConfig().invites || {}) };
+      for (const p of people) invites[p.id] = { at: new Date().toISOString(), sent: false };
+      updateConfig({ invites });
+      return go(res, 'ok', `Saved ${plural(wizard.drafts.length, 'draft')} in your Outlook. Check one, then send them all.`, '/admin#invite');
+    }
+    case '/admin/send': {
+      if (!wizard.drafts?.length) throw new Error('Save the drafts first.');
+      const r = await provision.sendInvites(wizard.drafts);
+      const invites = { ...(loadConfig().invites || {}) };
+      const team = loadConfig().team?.people || [];
+      for (const d of wizard.drafts) {
+        const p = team.find((x) => x.email === d.to);
+        if (p && d.sent) invites[p.id] = { at: new Date().toISOString(), sent: true };
+      }
+      updateConfig({ invites });
+      const done = r.errors.length ? 'warn' : 'ok';
+      wizard.inviteIds = null;
+      wizard.drafts = null;
+      return go(res, done, `Sent ${plural(r.sent, 'invitation')}.${r.errors.length ? ` Not sent: ${r.errors.join('; ')}` : ''}`, '/admin#people');
     }
     case '/admin/cancel':
       provision.cancelProvision();

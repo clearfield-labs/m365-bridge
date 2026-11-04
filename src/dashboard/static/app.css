@@ -66,6 +66,7 @@ main > * { min-width: 0; }
 .card-h { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
 .card-h h2 { font-size: 15px; line-height: 20px; display: flex; align-items: center; gap: 8px; flex: 1; }
 .card-h h2 .i { color: var(--text-2); }
+.card-h h2 .i.ok { color: var(--ok); stroke-width: 2; }
 details.card > summary { list-style: none; cursor: pointer; border-bottom: 0; }
 details.card > summary::-webkit-details-marker { display: none; }
 details.card > summary::after { content: ""; width: 8px; height: 8px; border-right: 1.5px solid var(--text-2); border-bottom: 1.5px solid var(--text-2); transform: rotate(45deg); margin: -4px 4px 0 6px; transition: transform .15s; }
@@ -244,3 +245,41 @@ dialog h3 { font-size: 20px; line-height: 28px; }
   .pop { right: auto; left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Admin wizard */
+.stepper { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; }
+.stepper li { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-weight: 600; padding: 6px 12px 6px 6px; border-radius: 16px; background: var(--card); box-shadow: var(--shadow); }
+.stepper .num { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line-2); display: grid; place-items: center; font-size: 12px; }
+.stepper li.now { color: var(--text); }
+.stepper li.now .num { border-color: var(--brand); color: var(--brand); }
+.stepper li.done .num { background: var(--ok); border-color: var(--ok); color: #fff; }
+.stepper li.done .num .i { width: 14px; height: 14px; stroke-width: 2.4; }
+details.more { margin-top: 10px; }
+details.more > summary { cursor: pointer; color: var(--brand); font-weight: 600; margin-bottom: 8px; }
+.note { margin-top: 14px; padding: 10px 12px; border-radius: 6px; background: var(--info-soft); color: var(--text); }
+.bar-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 20px; background: var(--hover); border-bottom: 1px solid var(--line); font-size: 13px; color: var(--text-2); }
+.bar-info .i { width: 16px; height: 16px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.facts dd small { display: block; margin-top: 2px; }
+.people-tools { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 12px 20px; }
+.people-tools .input { max-width: 320px; }
+.people { list-style: none; margin: 0; padding: 0; max-height: 520px; overflow: auto; border-top: 1px solid var(--line); }
+.people li { border-bottom: 1px solid var(--line); }
+.people li.unlic { display: none; }
+.people.show-unlic li.unlic { display: block; }
+.people li.hide { display: none !important; }
+.person { display: flex; align-items: center; gap: 12px; padding: 10px 20px; cursor: pointer; }
+.person:hover { background: var(--hover); }
+.person input { accent-color: var(--brand); width: 16px; height: 16px; }
+.person:has(input:checked) { background: var(--brand-soft); }
+.who-p { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.who-p b { font-weight: 600; }
+.who-p small { color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person .st { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.people-foot { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 20px; background: var(--card); border-top: 1px solid var(--line); }
+.drafts { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; }
+.drafts li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.drafts li:first-child { border-top: 0; }
+.preview { margin-top: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #242424; overflow-wrap: anywhere; }
+.preview .lbl-f { color: #242424; }
+@media (max-width: 720px) { .person .st { display: none; } .people-foot .grow { display: none; } }

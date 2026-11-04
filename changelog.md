@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 (2026-11-04)
+
+- feat: admin setup is now a four-step wizard: 1) firm name and permissions, 2) one admin approval for exactly those, 3) choose people from the firm's directory and give them access, 4) email each person their own setup code from the admin's Outlook (drafts first, then Send all). The admin sign-in stays in memory only
+- feat: after setup, the Admin page is a firm overview: what Claude can reach, who can use it, the setup code, and a People list (has access / invited) with Refresh. Add someone later by ticking them and clicking Give access and invite. The last loaded list is kept encrypted on this computer
+- feat: personal setup codes carry the person's email, so their Microsoft sign-in is pre-filled
+- feat: editable invitation template with {first_name} and {setup_code}, and a preview
+- fix: paged Graph calls during setup now use the admin sign-in (re-running setup could add a second approval)
+- fix: keychain and DPAPI calls time out instead of hanging when the OS key store waits on a dialog
+- test: wizard end to end (permissions -> approve -> people -> drafts with personal codes -> send -> overview -> add later)
+
 ## 0.4.0 (2026-11-04)
 
 - feat: optional permission packs (off by default): Microsoft 365 groups, create SharePoint libraries and lists, Bookings, meeting attendance, meeting rooms, sensitivity labels, Graph connectors, Copilot meeting recaps, full SharePoint site control. Shown under "Optional" in Permissions
