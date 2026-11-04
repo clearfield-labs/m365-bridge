@@ -30,10 +30,18 @@ const wizard = { editing: false, inviteIds: null, subject: null, message: null, 
 
 async function refreshTeam() {
   const cfg = loadConfig();
+  await provision.ensureSelfAccess(cfg.clientId).catch(() => {});
   const t = await provision.listPeople(cfg.clientId);
   updateConfig({ team: { ...t, fetchedAt: new Date().toISOString() } });
   return t;
 }
+/** The admin sign-in lives in memory, so it ends on restart. Sign in again, then finish what was asked. */
+function signInThen(res, action) {
+  const j = provision.startSignIn({ onDone: async () => { await action(); } });
+  j.mode = 'signin';
+  return redirect(res, '/admin');
+}
+
 const selectedPeople = (ids) => {
   const team = loadConfig().team?.people || [];
   const set = new Set(ids);
@@ -151,7 +159,7 @@ async function handle(req, res) {
       return setTimeout(() => process.exit(0), 100);
     }
     const body = parseForm(await readRaw(req));
-    const back = body.back === 'admin' ? '/admin' : '/';
+    const back = body.back === 'admin' || url.pathname.startsWith('/admin') ? '/admin' : '/';
     try {
       return await post(url.pathname, body, res, back);
     } catch (e) {
@@ -283,20 +291,24 @@ async function post(route, body, res, back) {
       wizard.drafts = null;
       return redirect(res, '/admin');
     case '/admin/refresh': {
-      if (!provision.adminSession()) throw new Error('Sign in as admin to refresh the list.');
+      if (!provision.adminSession()) return signInThen(res, async () => { await refreshTeam(); });
       const t = await refreshTeam();
       return go(res, 'ok', `Loaded ${t.people.length} people from Microsoft 365.`, '/admin#people');
     }
     case '/admin/access': {
       const ids = list(body.ids);
       if (!ids.length) throw new Error('Tick at least one person.');
-      if (!provision.adminSession()) throw new Error('Sign in as admin first.');
-      const cfg = loadConfig();
       const restricted = body.restricted === 'on';
-      const r = await provision.grantAccess({ appId: cfg.clientId, ids, restricted });
-      await refreshTeam().catch(() => {});
-      wizard.inviteIds = ids;
-      wizard.drafts = null;
+      const run = async () => {
+        const r = await provision.grantAccess({ appId: loadConfig().clientId, ids, restricted });
+        await refreshTeam().catch(() => {});
+        wizard.inviteIds = ids.filter((id) => id !== provision.adminSession()?.me?.id);
+        wizard.drafts = null;
+        return r;
+      };
+      if (!provision.adminSession()) return signInThen(res, run);
+      const r = await run();
+      if (!wizard.inviteIds.length) return go(res, 'ok', 'Done. You already have access as the admin.', '/admin#people');
       flash = { kind: 'ok', text: `${r.added ? `Gave access to ${plural(r.added, 'person', 'people')}.` : 'They already had access.'} Now send them their setup codes.` };
       return redirect(res, '/admin#invite');
     }
@@ -307,7 +319,11 @@ async function post(route, body, res, back) {
       return redirect(res, '/admin#invite');
     }
     case '/admin/drafts': {
-      if (!provision.adminSession()) throw new Error('Sign in as admin first.');
+      if (!provision.adminSession()) {
+        wizard.subject = body.subject || wizard.subject;
+        wizard.message = body.message || wizard.message;
+        return signInThen(res, async () => {});
+      }
       const people = selectedPeople(wizard.inviteIds || []);
       if (!people.length) throw new Error('Nobody selected to invite.');
       wizard.subject = body.subject || provision.DEFAULT_SUBJECT;

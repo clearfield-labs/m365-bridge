@@ -273,6 +273,8 @@ details.more.code > summary { margin-bottom: 4px; }
 .person { display: flex; align-items: center; gap: 12px; padding: 10px 20px; cursor: pointer; }
 .person:hover { background: var(--hover); }
 .person input { accent-color: var(--brand); width: 16px; height: 16px; }
+.person .nobox { width: 16px; flex: none; }
+.me-row .person { cursor: default; }
 .person:has(input:checked) { background: var(--brand-soft); }
 .who-p { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .who-p b { font-weight: 600; }

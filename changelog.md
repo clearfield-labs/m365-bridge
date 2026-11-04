@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 (2026-11-04)
+
+- feat: the admin who sets up the firm gets access automatically (also checked on every admin sign-in); their row shows "You" with no checkbox
+- feat: if the admin sign-in has ended (it lives in memory and ends on restart), Give access, Refresh and Save drafts sign in first and then finish the action
+- fix: errors from Admin actions return to the Admin page, not Home
+
 ## 0.5.1 (2026-11-04)
 
 - fix: clearer setup-code wording on the Admin overview, and the long code is folded behind "Show the firm's setup code"

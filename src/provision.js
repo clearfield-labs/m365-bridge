@@ -128,6 +128,14 @@ export async function setupApp({ cfg, firmName, onStep = () => {} }) {
   else await graph('/oauth2PermissionGrants', { method: 'POST', body: { clientId: sp.id, consentType: 'AllPrincipals', resourceId: graphSp.id, scope }, token });
   onStep(`Approved ${granted.length} permissions for the firm.`);
 
+  // Whoever sets it up can use it, without having to pick themselves.
+  try {
+    await g(`/servicePrincipals/${sp.id}/appRoleAssignedTo`, { method: 'POST', body: { principalId: session.me.id, resourceId: sp.id, appRoleId: DEFAULT_ACCESS_ROLE } });
+  } catch (e) {
+    if (!/already exists/i.test(e.message) && e.status !== 409) throw e;
+  }
+  onStep(`Gave you (${session.me.userPrincipalName}) access.`);
+
   audit({ tool: 'firm_setup_auto', tenant: session.tenantId, app: app.appId });
   return {
     tenantId: session.tenantId,
@@ -163,6 +171,18 @@ export async function listPeople(appId) {
       }))
       .sort((a, b) => Number(b.licensed) - Number(a.licensed) || a.name.localeCompare(b.name)),
   };
+}
+
+/** Make sure the signed-in admin can use the app (safe to call any time). */
+export async function ensureSelfAccess(appId) {
+  const sp = appId && session?.me?.id ? await servicePrincipalFor(appId) : null;
+  if (!sp) return false;
+  try {
+    await g(`/servicePrincipals/${sp.id}/appRoleAssignedTo`, { method: 'POST', body: { principalId: session.me.id, resourceId: sp.id, appRoleId: DEFAULT_ACCESS_ROLE } });
+  } catch (e) {
+    if (!/already exists/i.test(e.message) && e.status !== 409) throw e;
+  }
+  return true;
 }
 
 /** Give these people access. restricted = only assigned people can sign in. */

@@ -251,7 +251,8 @@ function people(s) {
       p.hasAccess ? '<span class="pill ok">Has access</span>' : '',
       inv ? `<span class="pill ${inv.sent ? 'info' : ''}">${inv.sent ? 'Invited' : 'Draft saved'} ${fmtDate(inv.at)}</span>` : '',
     ].join('');
-    return `<li class="${p.licensed ? '' : 'unlic'}" data-name="${e(`${p.name} ${p.email} ${p.title}`.toLowerCase())}"><label class="person"><input type="checkbox" name="ids" value="${e(p.id)}"><span class="avatar">${e(initials({ name: p.name }))}</span><span class="who-p"><b>${e(p.name)}</b><small>${e(p.email)}${p.title ? ` · ${e(p.title)}` : ''}</small></span><span class="st">${status}</span></label></li>`;
+    const box = p.isAdmin ? '<span class="nobox"></span>' : `<input type="checkbox" name="ids" value="${e(p.id)}">`;
+    return `<li class="${p.licensed ? '' : 'unlic'}${p.isAdmin ? ' me-row' : ''}" data-name="${e(`${p.name} ${p.email} ${p.title}`.toLowerCase())}"><label class="person">${box}<span class="avatar">${e(initials({ name: p.name }))}</span><span class="who-p"><b>${e(p.name)}</b><small>${e(p.email)}${p.title ? ` · ${e(p.title)}` : ''}</small></span><span class="st">${status}</span></label></li>`;
   });
   const withAccess = team.people.filter((p) => p.hasAccess).length;
   const unlic = team.people.filter((p) => !p.licensed).length;
