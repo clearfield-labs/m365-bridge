@@ -84,6 +84,14 @@ m365-bridge serve       the MCP server (Claude runs this)
 - The activity log (`~/.m365-bridge/audit.log`) records actions and file names, never contents.
 - Sign-in uses the authorization code flow with PKCE, which is the standard for desktop apps.
 
+## Demo without a tenant
+
+```bash
+npm run demo
+```
+
+This runs the real dashboard and tools against a fake Microsoft 365 with a seeded matter folder, a signed-in user and some activity. It opens at `http://localhost:4366` and never touches your real settings.
+
 ## Development
 
 ```bash

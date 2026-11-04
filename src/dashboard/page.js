@@ -6,7 +6,7 @@ const e = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<'
 const CSS = `
 :root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--muted:#6b6a65;--line:#e4e2dc;--accent:#2f5d50;--accent-ink:#fff;--ok:#2f7a4f;--warn:#a26a12;--err:#a83232;--chip:#efede7;--code:#f1efe9}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1d1d1b;--ink:#eceae4;--muted:#9a988f;--line:#2e2d2a;--accent:#7fb8a4;--accent-ink:#10201a;--ok:#7cc79a;--warn:#e0b25a;--err:#e88b8b;--chip:#2a2926;--code:#26251f}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+*{box-sizing:border-box}a{color:var(--accent)}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
 .wrap{max-width:880px;margin:0 auto;padding:32px 16px 80px}
 header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:24px}
 h1{font:600 24px/1.2 Georgia,"Times New Roman",serif;margin:0}h2{font:600 18px/1.3 Georgia,serif;margin:0 0 4px}
@@ -93,12 +93,17 @@ function firmSection(s) {
 <form method="post" action="/firm" data-busy="Saving…"><label>Setup code from your admin</label><textarea name="setupCode" placeholder="M365B-…"></textarea><div class="actions"><button type="submit">Use setup code</button></div></form>
 <details><summary>I'm the admin. Enter the IDs from Entra</summary>${form}</details>${entraGuide(s.port)}</section>`;
   }
+  const packCount = 1 + (cfg.packs || []).filter((k) => k !== 'files' && PACKS[k]).length;
+  const labels = ['files', ...(cfg.packs || []).filter((k) => k !== 'files' && PACKS[k])].map((k) => PACKS[k].label.split(' (')[0]);
   return `<section class="card" id="firm"><h2><span class="step done">1</span>${e(cfg.firmName || 'Your firm')} is connected</h2>
-<p class="sub">Tenant <code>${e(cfg.tenantId)}</code> · App <code>${e(cfg.clientId)}</code> · ${cfg.allowWrite ? 'read and write' : 'read only'}${cfg.allowDelete ? ' · deletes allowed' : ''}</p>
-<div class="scopes">${scopesFor(cfg).map((x) => `<code>${e(x)}</code>`).join('')}</div>
+<p class="sub">${e(labels.join(' · '))}</p>
+<p class="muted">${cfg.allowWrite ? 'Claude can read and make changes' : 'Read only'}${cfg.allowDelete ? ', including deletes' : ', never deletes'}. ${packCount} permission pack${packCount === 1 ? '' : 's'}.</p>
+<details><summary>Admin tools</summary>
 <label>Setup code for your team (no secrets inside: tenant, app and permission choices)</label>${copy(s.setupCode)}
 <div class="actions"><a class="btn" href="${e(adminConsentUrl(cfg, REDIRECT_URI))}">Grant admin consent for the firm</a><span class="muted">Global admin only. One click approves these permissions for everyone.</span></div>
-<details><summary>Change firm settings</summary>${form}</details>${entraGuide(s.port)}</section>`;
+<label>Tenant <code>${e(cfg.tenantId)}</code> · App <code>${e(cfg.clientId)}</code></label>
+<div class="scopes">${scopesFor(cfg).map((x) => `<code>${e(x)}</code>`).join('')}</div>
+<details><summary>Change firm settings</summary>${form}</details>${entraGuide(s.port)}</details></section>`;
 }
 
 function accountSection(s) {

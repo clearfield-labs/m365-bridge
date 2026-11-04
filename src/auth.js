@@ -58,7 +58,9 @@ function client() {
 }
 
 export async function currentAccount() {
-  if (process.env.M365_TEST_TOKEN) return { username: 'test@example.com', name: 'Test User' };
+  if (process.env.M365_TEST_TOKEN) {
+    return { username: process.env.M365_TEST_USER || 'test@example.com', name: process.env.M365_TEST_NAME || 'Test User' };
+  }
   try {
     const { pca } = client();
     const accounts = await pca.getTokenCache().getAllAccounts();
