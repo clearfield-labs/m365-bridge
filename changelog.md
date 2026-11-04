@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 (2026-11-04)
+
+- feat: while firm setup waits for the admin, a quiet "Open sign-in again" link (the Microsoft sign-in URL) and a Cancel link; `firm_setup` returns the link to Claude too
+- feat: the setup form keeps the firm name, access choice and people from the last run
+
 ## 0.3.1 (2026-11-04)
 
 - fix: page buttons failed with "Forbidden origin" in real browsers. `Referrer-Policy: no-referrer` made Chromium browsers send `Origin: null` on our own forms. Now `same-origin`, and the cross-site check trusts `Sec-Fetch-Site: same-origin` for opaque origins

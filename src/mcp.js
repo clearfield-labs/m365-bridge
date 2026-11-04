@@ -112,7 +112,7 @@ export function createServer() {
       }
       const deadline = Date.now() + 120000;
       while (j.running && Date.now() < deadline) await new Promise((r) => setTimeout(r, 500));
-      if (j.running) return { status: 'Waiting for the admin to finish signing in to Microsoft in the browser. Call firm_setup again to check.', progress: j.steps.map((x) => x.text) };
+      if (j.running) return { status: 'Waiting for the admin to finish signing in to Microsoft in the browser. Call firm_setup again to check.', sign_in_link: j.signInUrl || undefined, progress: j.steps.map((x) => x.text) };
       if (j.error) throw new Error(`Firm setup failed: ${j.error}`);
       return finished(j.result);
       async function finished(r) {

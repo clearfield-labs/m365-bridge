@@ -202,6 +202,8 @@ details.menu > summary::-webkit-details-marker { display: none; }
 .progress li { display: flex; gap: 8px; align-items: center; }
 .progress li .i { color: var(--ok); width: 16px; height: 16px; stroke-width: 2; }
 .progress li.now { color: var(--text-2); }
+.progress .again { margin-top: 8px; font-size: 13px; color: var(--text-2); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.progress .again .inline-form { margin: 0; }
 .progress .bad, .progress .good { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-weight: 600; }
 .progress .bad { color: var(--bad); } .progress .good { color: var(--ok); }
 

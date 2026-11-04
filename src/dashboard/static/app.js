@@ -101,6 +101,8 @@
     var poll = setInterval(function () {
       fetch('/api/setup-job').then(function (r) { return r.json(); }).then(function (j) {
         if (!j.data || j.data.running) {
+          var link = job.querySelector('[data-signin]');
+          if (link && j.data && j.data.signInUrl) { link.href = j.data.signInUrl; link.hidden = false; }
           if (j.data) job.querySelector('ul').innerHTML = j.data.steps.map(function (s) { return '<li><svg class="i" viewBox="0 0 20 20"><path d="m4.5 10.5 3.5 3.5 7.5-8"/></svg><span>' + esc(s) + '</span></li>'; }).join('') + '<li class="now"><span class="spin"></span><span>Working…</span></li>';
           return;
         }

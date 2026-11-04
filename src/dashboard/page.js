@@ -180,17 +180,22 @@ ${setup(s)}${ready ? held(s) + folders(s) + prompts() : ''}${activity(s)}`;
 
 function autoSetup(s) {
   const j = s.job;
-  const progress = j
-    ? `<div class="progress" data-job${j.running ? ' data-running' : ''}><ul>${j.steps.map((x) => `<li>${icon('check')}<span>${e(x.text)}</span></li>`).join('')}${j.running ? '<li class="now"><span class="spin"></span><span>Working…</span></li>' : ''}</ul>${j.error ? `<p class="bad">${icon('warn')}${e(j.error)}</p>` : ''}${j.done ? `<p class="good">${icon('check')}Done. Share the setup code below with your team.</p>` : ''}</div>`
+  const again = j?.running
+    ? `<p class="again"><span>Didn't see the Microsoft tab?</span> <a href="${e(j.signInUrl || '#')}" target="_blank" rel="noopener" data-signin${j.signInUrl ? '' : ' hidden'}>Open sign-in again</a>${form('/admin/cancel', '<button class="link" type="submit">Cancel</button>', { cls: 'inline-form' })}</p>`
     : '';
+  const progress = j
+    ? `<div class="progress" data-job${j.running ? ' data-running' : ''}><ul>${j.steps.map((x) => `<li>${icon('check')}<span>${e(x.text)}</span></li>`).join('')}${j.running ? '<li class="now"><span class="spin"></span><span>Working…</span></li>' : ''}</ul>${again}${j.error ? `<p class="bad">${icon('warn')}${e(j.error)}</p>` : ''}${j.done ? `<p class="good">${icon('check')}Done. Share the setup code below with your team.</p>` : ''}</div>`
+    : '';
+  const o = j?.options || {};
+  const selected = o.access === 'selected';
   return `<section class="card" id="setup"><div class="card-h"><h2>${icon('admin')}Set up your firm</h2>${s.configured ? '<span class="pill ok">Done</span>' : ''}</div>
 <div class="pad"><p>Sign in with a Microsoft 365 admin account. M365 Bridge creates its app in Entra and approves it for the firm. There is nothing to copy and no secret.</p>
 ${progress}
-${form('/admin/auto', `<label class="lbl-f" for="fn">Firm name</label><input class="input short" id="fn" name="firmName" value="${e(s.cfg.firmName)}" placeholder="Smith &amp; Partners LLP">
+${form('/admin/auto', `<label class="lbl-f" for="fn">Firm name</label><input class="input short" id="fn" name="firmName" value="${e(o.firmName || s.cfg.firmName)}" placeholder="Smith &amp; Partners LLP">
 <fieldset class="choice"><legend class="lbl-f">Who can use it</legend>
-<label><input type="radio" name="access" value="everyone" checked><span><b>Everyone in the firm</b><small>Each person only sees their own files and email.</small></span></label>
-<label><input type="radio" name="access" value="selected"><span><b>Only these people</b><small>Start small. Run this again later to add more.</small></span></label>
-<textarea class="input" name="people" rows="2" placeholder="jeremy@firm.com, maria@firm.com"></textarea></fieldset>
+<label><input type="radio" name="access" value="everyone"${selected ? '' : ' checked'}><span><b>Everyone in the firm</b><small>Each person only sees their own files and email.</small></span></label>
+<label><input type="radio" name="access" value="selected"${selected ? ' checked' : ''}><span><b>Only these people</b><small>Start small. Run this again later to add more.</small></span></label>
+<textarea class="input" name="people" rows="2" placeholder="jeremy@firm.com, maria@firm.com">${e((o.people || []).join(', '))}</textarea></fieldset>
 <button class="btn primary" type="submit"${j?.running ? ' disabled' : ''}>${s.configured ? 'Run setup again' : 'Sign in as admin and set up'}</button>`, { busy: 'Opening Microsoft sign-in…', back: 'admin' })}</div></section>`;
 }
 

@@ -74,7 +74,7 @@ async function state() {
     held: ws.heldFiles(),
     workspacesRoot: WORKSPACES_ROOT,
     audit: recentAudit(12),
-    job: provision.job ? { running: provision.job.running, steps: provision.job.steps, error: provision.job.error, done: !!provision.job.result } : null,
+    job: provision.job ? { running: provision.job.running, steps: provision.job.steps, error: provision.job.error, done: !!provision.job.result, signInUrl: provision.job.signInUrl, options: provision.job.options } : null,
   };
 }
 
@@ -173,7 +173,7 @@ async function handle(req, res) {
     }
     case '/api/setup-job': {
       const j = provision.job;
-      return sendJson(res, 200, { data: j ? { running: j.running, steps: j.steps.map((x) => x.text), error: j.error, done: !!j.result } : null });
+      return sendJson(res, 200, { data: j ? { running: j.running, steps: j.steps.map((x) => x.text), error: j.error, done: !!j.result, signInUrl: j.signInUrl } : null });
     }
     case '/assets/app.css':
     case '/assets/app.js':
@@ -219,9 +219,12 @@ async function post(route, body, res, back) {
       const people = String(body.people || '').split(/[\s,;]+/).filter((x) => x.includes('@'));
       if (body.access === 'selected' && !people.length) throw new Error('List at least one email address, or choose "Everyone in the firm".');
       const j = startProvision({ firmName: body.firmName?.trim(), access: body.access === 'selected' ? 'selected' : 'everyone', people, cfg: loadConfig() });
-      j.promise.then((r) => r && applyFirm({ tenantId: r.tenantId, clientId: r.clientId, firmName: r.firmName })).catch(() => {});
+      j.promise.then((r) => r && !j.cancelled && applyFirm({ tenantId: r.tenantId, clientId: r.clientId, firmName: r.firmName })).catch(() => {});
       return redirect(res, '/admin#setup');
     }
+    case '/admin/cancel':
+      provision.cancelProvision();
+      return redirect(res, '/admin#setup');
     case '/signout':
       await signOut();
       audit({ tool: 'sign_out' });

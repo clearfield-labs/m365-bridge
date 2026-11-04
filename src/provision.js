@@ -25,7 +25,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const page = (title, text) =>
   `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#f5f5f5;color:#242424"><div style="background:#fff;padding:32px 40px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.12);max-width:420px"><h1 style="font-size:20px;font-weight:600;margin:0 0 8px">${title}</h1><p style="margin:0;color:#616161;line-height:1.5">${text}</p></div>`;
 
-async function adminToken() {
+async function adminToken(onUrl = () => {}) {
   if (process.env.M365_TEST_ADMIN_TOKEN) return { token: process.env.M365_TEST_ADMIN_TOKEN, tenantId: process.env.M365_TEST_TENANT || '' };
   const pca = new PublicClientApplication({
     auth: { clientId: GRAPH_CLI_APP, authority: 'https://login.microsoftonline.com/organizations' },
@@ -34,7 +34,7 @@ async function adminToken() {
   const res = await pca.acquireTokenInteractive({
     scopes: ADMIN_SCOPES,
     prompt: 'select_account',
-    openBrowser: async (url) => openBrowser(url),
+    openBrowser: async (url) => { onUrl(url); openBrowser(url); },
     successTemplate: page('Signed in', 'Setting up your firm now. Go back to the M365 Bridge tab to watch it finish.'),
     errorTemplate: page('Sign-in failed', 'Go back to the M365 Bridge tab and try again.'),
   });
@@ -46,18 +46,32 @@ export let job = null;
 
 export function startProvision(options) {
   if (job?.running) return job;
-  job = { running: true, steps: [], error: null, result: null, started: new Date().toISOString() };
+  const { firmName, access, people } = options;
+  job = { running: true, steps: [], error: null, result: null, signInUrl: null, cancelled: false, options: { firmName, access, people }, started: new Date().toISOString() };
   const current = job;
-  current.promise = provision({ ...options, onStep: (text) => current.steps.push({ text, at: new Date().toISOString() }) })
-    .then((r) => { current.result = r; return r; })
-    .catch((e) => { current.error = e.message; })
+  current.promise = provision({
+    ...options,
+    onStep: (text) => { if (!current.cancelled) current.steps.push({ text, at: new Date().toISOString() }); },
+    onSignInUrl: (url) => { current.signInUrl = url; },
+  })
+    .then((r) => { if (current.cancelled) return null; current.result = r; return r; })
+    .catch((e) => { if (!current.cancelled) current.error = e.message; return null; })
     .finally(() => { current.running = false; });
   return current;
 }
 
-export async function provision({ firmName, access = 'everyone', people = [], cfg, onStep = () => {} }) {
+/** Stop waiting for the admin. A sign-in finished after this is ignored. */
+export function cancelProvision() {
+  if (!job?.running) return false;
+  job.cancelled = true;
+  job.running = false;
+  job.error = 'Cancelled. Nothing was changed in Microsoft 365.';
+  return true;
+}
+
+export async function provision({ firmName, access = 'everyone', people = [], cfg, onStep = () => {}, onSignInUrl }) {
   onStep('Waiting for an admin to sign in to Microsoft…');
-  const { token, tenantId: tid } = await adminToken();
+  const { token, tenantId: tid } = await adminToken(onSignInUrl);
   const g = (p, opts = {}) => graph(p, { ...opts, token });
 
   const org = (await g('/organization?$select=id,displayName')).value?.[0] || {};
