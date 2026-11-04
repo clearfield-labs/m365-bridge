@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 (2026-11-04)
+
+- fix: saving Permissions before firm setup failed (no tenant IDs yet). It now stores the choices, and setup requests exactly those
+
 ## 0.3.2 (2026-11-04)
 
 - feat: while firm setup waits for the admin, a quiet "Open sign-in again" link (the Microsoft sign-in URL) and a Cancel link; `firm_setup` returns the link to Claude too

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { PORT, DASHBOARD_URL, WORKSPACES_ROOT, PACKAGE_ROOT } from '../paths.js';
-import { loadConfig, isConfigured } from '../config.js';
+import { loadConfig, updateConfig, isConfigured } from '../config.js';
 import { currentAccount, startBrowserSignIn, finishBrowserSignIn, signOut } from '../auth.js';
 import { keyStorage } from '../vault.js';
 import { recentAudit, audit } from '../audit.js';
@@ -204,16 +204,20 @@ async function post(route, body, res, back) {
     }
     case '/settings': {
       const cfg = loadConfig();
-      await applyFirm({
-        tenantId: cfg.tenantId,
-        clientId: cfg.clientId,
-        firmName: body.firmName?.trim() ?? cfg.firmName,
+      const patch = {
+        firmName: body.firmName?.trim() || cfg.firmName,
         allowWrite: body.allowWrite === 'on',
         allowDelete: body.allowDelete === 'on',
         packs: Object.keys(PACKS).filter((k) => k !== 'files' && body[`pack_${k}`] === 'on'),
         extraScopes: parseExtraScopes(body.extraScopes).join(' '),
-      });
-      return go(res, 'ok', 'Settings saved. If you changed permissions, run firm setup again (or approve again) so Microsoft allows them.', '/admin');
+      };
+      // Before setup there are no IDs yet: just remember the choices; setup asks Microsoft for exactly these.
+      if (!isConfigured(cfg)) {
+        updateConfig(patch);
+        return go(res, 'ok', 'Saved. Firm setup will ask Microsoft for exactly these permissions.', '/admin');
+      }
+      await applyFirm({ tenantId: cfg.tenantId, clientId: cfg.clientId, ...patch });
+      return go(res, 'ok', 'Settings saved. If you changed permissions, run setup again so Microsoft allows them, then send the team the new setup code.', '/admin');
     }
     case '/admin/auto': {
       const people = String(body.people || '').split(/[\s,;]+/).filter((x) => x.includes('@'));
