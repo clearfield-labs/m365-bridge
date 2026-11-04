@@ -1,139 +1,155 @@
-# M365 Bridge for Claude
+<div align="center">
 
-Use SharePoint, OneDrive, Outlook and Teams from Claude Code, signed in as yourself. Matter folders in SharePoint or OneDrive stay the source of truth, the way GitHub is for developers, with no GitHub involved.
+<img src="docs/images/logo.svg" width="72" height="72" alt="M365 Bridge logo">
 
-- **Each person signs in as themselves.** Claude sees only what that person can already open in Microsoft 365. There are no shared keys and no secrets on laptops.
-- **One admin setup for the firm.** The admin clicks **Set up my firm** and signs in once. M365 Bridge creates the Entra app and approves it, then hands back a setup code for the team.
-- **Always on.** M365 Bridge runs in the background from the moment the computer starts. Claude Code connects to it by itself.
-- **No two people edit the same file.** Before Claude changes a file, M365 Bridge checks it out in SharePoint, so colleagues see "Checked out to Jeremy". When Claude finishes, the file is checked back in with a note that shows in version history.
-- **One file, never two copies.** If a file changed in SharePoint and on the laptop, Claude merges the two into one file. M365 Bridge never leaves "copy" files behind.
+# M365 Bridge
 
-## How it works
+**A Microsoft 365 MCP server for Claude Code and Claude Desktop.**<br>
+SharePoint, OneDrive, Outlook, Teams and calendar, signed in as each person. Shared folders sync like git, with SharePoint check-out so two people never edit the same file.
 
-```
- Claude Code ──► M365 Bridge (background, this computer) ──► Microsoft 365
-                 signed in as you                            SharePoint, OneDrive, Outlook, Teams
-```
+[![CI](https://github.com/clearfield-labs/m365-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/clearfield-labs/m365-bridge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-0f6cbd.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-server-0f6cbd.svg)](https://modelcontextprotocol.io)
+![Platforms](https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-supported-0f6cbd.svg)
 
-Matter folders work like a git repo:
+[Install](#install) · [How it works](#how-it-works) · [For admins](#set-up-a-firm-admin) · [Tools](#what-claude-can-do) · [Security](#security) · [FAQ](#faq)
 
-```
-SharePoint folder ──get latest──► ~/M365 Workspaces/Smith v Jones ──send changes──► SharePoint (new version, with a note)
-                                    │
-                                    └── before Claude edits a file: check it out in SharePoint
-```
+<img src="docs/images/home.png" width="820" alt="The M365 Bridge page: setup checklist, files checked out to you, synced SharePoint folders">
 
-| Step | What happens |
-|---|---|
-| **Get latest** | Copies new and changed files down. Never overwrites your edits. Files moved or deleted in SharePoint are removed here too, unless you edited them. |
-| **Check out** | Happens automatically before Claude edits. Colleagues can open the file but not save it. If a colleague already holds it, Claude stops and tells you who has it. If SharePoint has a newer version, Claude gets it first. |
-| **Send changes** | Uploads the file and checks it in with a note such as "Added deposition dates (via Claude)". Files Claude checked out but did not change are released. |
-| **Merge** | Only needed if a file changed on both sides, for example someone edited it in SharePoint before it was checked out. Claude gets your version, their version and the original, writes one merged file, shows you, and sends it. |
-| **Organise** | Claude renames and moves files and folders in SharePoint and on your computer together. |
+</div>
 
-People who don't use Claude keep working in Word and SharePoint as usual. They see a file as checked out while Claude is working on it.
+## Why
+
+Lawyers, accountants and other firms keep their work in Microsoft 365. Claude Code is the best way to work on documents with AI, but it expects a git repo, and nobody at a law firm wants GitHub.
+
+M365 Bridge makes SharePoint and OneDrive the source of truth instead:
+
+- **Each person signs in as themselves.** Claude reaches only what that person can already open. There are no shared keys and no secrets on laptops.
+- **Full Microsoft 365, not a narrow connector.** Files, mail (including shared mailboxes), calendars, Teams chats and transcripts, To Do, Planner, OneNote and any other Microsoft Graph call, within the permissions the admin chooses.
+- **Shared folders without overwrites.** Before Claude edits a file, it is checked out in SharePoint. When Claude is done, the file is checked in with a note in version history. If two people changed the same file, Claude merges the changes into one file. There are never "copy" files.
+- **Set up in minutes.** One admin approval for the firm, a team list to pick people from, and invitation emails from the admin's own Outlook.
+- **Always on.** It starts with the computer and Claude connects to it on its own. Lawyers open it from Spotlight or the Start menu, or bookmark `localhost:4365`.
 
 ## Install
 
 **Mac** (Terminal):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irfad7/m365-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.sh | bash
 ```
 
 **Windows** (PowerShell):
 ```powershell
-irm https://raw.githubusercontent.com/irfad7/m365-bridge/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.ps1 | iex
 ```
 
 **Or ask Claude Code:**
-> Install the M365 Bridge from https://github.com/irfad7/m365-bridge. Clone it, run npm install, then run `node bin/m365-bridge.js install`.
+> Install M365 Bridge from https://github.com/clearfield-labs/m365-bridge and set it up with this code: M365B-…
 
-The installer:
-- sets M365 Bridge to start with the computer: a LaunchAgent on Mac, the Startup folder on Windows
-- connects it to Claude Code and adds the check-out-before-edit hook
-- connects it to the Claude chat app too, if that is installed
-- opens `http://localhost:4365`
+The installer runs M365 Bridge in the background from login, connects Claude Code (and the Claude chat app if installed), adds an **M365 Bridge** app or shortcut, and opens `http://localhost:4365`. Run it again to update.
 
-Re-running the installer updates M365 Bridge and restarts it.
+Requires Node.js 18 or newer (the Windows installer installs it with winget).
 
-## Rolling it out to a firm
+## Set up a firm (admin)
 
-**The admin, once (about 5 minutes):** open `http://localhost:4365/admin` and follow four steps:
-1. **Firm and permissions.** Name the firm and tick what Claude can reach (optional extras included).
-2. **Approve.** Sign in once with a Microsoft 365 admin account. On Microsoft's screen, leave "Consent on behalf of your organization" unticked.
-3. **Choose people.** Your team appears from the directory. Tick who gets Claude.
-4. **Invite.** M365 Bridge saves an email per person in your Outlook, each with their own setup code. Check one, then **Send all**.
+Open `http://localhost:4365/admin`. Four steps, about five minutes:
 
-Afterwards the Admin page shows your setup and everyone's status. To add someone later, click **Refresh**, tick them, and click **Give access and invite**.
-
-**Each person, once (about 2 minutes):**
-1. Install M365 Bridge.
-2. Paste the setup code and click **Sign in with Microsoft**. Or ask Claude: "Set up M365 with this code: M365B-…"
-3. Restart Claude.
-
-**Every day, people just talk to Claude:**
-- "Get the latest on the Smith matter." (The first time, paste the SharePoint folder link.)
-- "Update the timeline with the dates from the deposition transcript, show me, then send it back."
-- "Organise the Smith folder into pleadings, discovery and correspondence."
-- "Find the settlement email from opposing counsel and draft a reply for me to review."
-
-Each person also needs the Claude Code desktop app and a Claude plan.
-
-## Tools Claude gets
-
-| Tool | What it does |
+| | |
 |---|---|
-| `status`, `setup`, `firm_setup`, `sign_in`, `open_dashboard` | Setup from inside Claude: paste a code, set up the firm as admin, sign in |
-| `search`, `list_places`, `list_folder`, `read_file` | Find and read anything you can access (Word, PDF and text) |
-| `download`, `upload`, `create_folder`, `move` | Single files. Upload never replaces an existing file unless told to |
+| **1. Firm and permissions.** Pick what Claude can reach. Optional extras include Bookings, sensitivity labels and Microsoft 365 groups. | <img src="docs/images/admin-1-permissions.png" width="420" alt="Step 1: choose permissions"> |
+| **2. Approve.** Sign in once with a Microsoft 365 admin account. M365 Bridge creates its Entra app and approves exactly those permissions for the firm. | |
+| **3. Choose people.** The firm's directory appears. Tick who gets Claude. | <img src="docs/images/admin-3-people.png" width="420" alt="Step 3: choose people"> |
+| **4. Invite.** One email per person lands in your Outlook drafts, each with a personal setup code. Check one, then send them all. | <img src="docs/images/admin-4-invite.png" width="420" alt="Step 4: invitation emails"> |
+
+Afterwards the Admin page shows the setup and everyone's status. Add a new hire with Refresh, tick, invite. Prefer the Entra portal? See [SETUP-ENTRA.md](SETUP-ENTRA.md).
+
+## How it works
+
+```
+ Claude Code ──► M365 Bridge (background, on your computer) ──► Microsoft Graph
+                 signed in as you                                SharePoint · OneDrive · Outlook · Teams
+```
+
+Shared folders work like a git repo:
+
+```
+SharePoint folder ──get latest──► ~/M365 Workspaces/Smith v Jones ──send──► SharePoint (new version + note)
+                                     │
+                                     └── before Claude edits a file: check it out in SharePoint
+```
+
+| Step | What happens |
+|---|---|
+| **Sync a folder** | Pick it in a folder browser (OneDrive, Shared with me, SharePoint sites) or paste a link. |
+| **Get latest** | New and changed files come down. Your edits are never overwritten. Files moved in SharePoint move here too. |
+| **Check out** | Automatic before Claude edits (a Claude Code hook). Colleagues can read the file but not save it. If a colleague holds it, Claude says who. |
+| **Send** | Upload and check in with a note such as "Added deposition dates (via Claude)". |
+| **Merge** | Only when a file changed on both sides. Claude gets yours, theirs and the original, writes one merged file and shows you. |
+| **Organise** | Claude renames and moves files and folders in SharePoint and locally together. |
+
+People who don't use Claude keep working in Word and SharePoint as usual.
+
+<img src="docs/images/folder-picker.png" width="720" alt="Folder picker: OneDrive, Shared with me and SharePoint sites">
+
+## What Claude can do
+
+| Tools | |
+|---|---|
+| `status`, `setup`, `firm_setup`, `sign_in` | Set up and sign in from inside Claude |
+| `search`, `list_places`, `list_folder`, `read_file` | Find and read anything you can open (Word, PDF, text) |
+| `download`, `upload`, `create_folder`, `move` | Single files; uploads never replace a file unless asked |
 | `versions`, `restore_version` | Version history and undo |
-| `workspace_pull`, `workspace_status` | Get latest and see what changed |
-| `workspace_lock`, `workspace_release` | Check files out in SharePoint, and hand them back |
-| `workspace_push`, `workspace_merge` | Send changes with a note; merge when both sides changed |
-| `workspace_move`, `workspace_list` | Organise synced folders; list folders and checked-out files |
-| `mail_search`, `mail_read`, `mail_draft` | Outlook, including shared mailboxes. Drafts by default; sends only when told to |
-| `calendar_view` | Your calendar, or a colleague's calendar you can see |
-| `graph_request` | Any other Microsoft Graph call as you: Teams, transcripts, contacts, To Do, Planner, OneNote |
+| `workspace_pull` · `status` · `lock` · `push` · `merge` · `release` · `move` · `list` | Synced folders with check-out, check-in and merges |
+| `mail_search`, `mail_read`, `mail_draft` | Outlook and shared mailboxes; drafts by default, sends only when told |
+| `calendar_view` | Your calendar or a colleague's calendar you can see |
+| `graph_request` | Any other Microsoft Graph call as you: Teams, transcripts, contacts, Planner, OneNote |
 
-## Commands
-
-```
-m365-bridge             open the M365 Bridge page
-m365-bridge install     run in the background from login, connect Claude, open the page
-m365-bridge start       start the background service if it stopped
-m365-bridge status      show setup state
-m365-bridge uninstall   stop the background service and disconnect Claude
-m365-bridge reset       delete settings and sign-ins from this computer
-```
+Things to ask Claude:
+- "Get the latest on the Smith matter, update the timeline from the deposition transcript, and send it back."
+- "Organise the Smith folder into pleadings, discovery and correspondence."
+- "Find the settlement email from opposing counsel and draft a reply for me."
+- "What's on my calendar tomorrow, and pull the transcript from yesterday's Henderson call."
 
 ## Security
 
-- M365 Bridge listens on this computer only (127.0.0.1). It refuses other Host headers (DNS rebinding) and requests from web pages (CSRF and cross-origin).
-- Claude Code's connection (`/mcp`) needs a random key that the installer writes into Claude's config. Web pages cannot send it.
-- Settings and sign-ins are encrypted with AES-256-GCM. The key is held by macOS Keychain or Windows DPAPI.
-- `graph_request` sends the token only to graph.microsoft.com.
-- The activity log (`~/.m365-bridge/audit.log`) records actions and file names, never contents.
-- Admin setup signs in through Microsoft's own Graph Command Line Tools app. That token stays in memory and is never saved.
+- **Delegated access only.** Every request runs as the signed-in person, so Microsoft enforces their own permissions. No app-only keys, no client secrets.
+- **Encrypted at rest.** Settings and sign-ins use AES-256-GCM with the key in macOS Keychain or Windows DPAPI.
+- **Local only.** The page and Claude's endpoint listen on 127.0.0.1. Other Host headers and cross-site requests are refused, and Claude's connection needs a per-computer key.
+- **Nothing is deleted.** Sync never deletes in SharePoint, and every upload is a new version.
+- **Activity log** of actions and file names, never contents.
+- **Admin setup** signs in through Microsoft's own Graph Command Line Tools app; that token stays in memory and is never saved.
+
+Report a vulnerability: see [SECURITY.md](SECURITY.md).
+
+## FAQ
+
+**How do I connect Claude Code to SharePoint?** Install M365 Bridge, paste your firm's setup code, sign in with Microsoft. Claude Code gets an `m365` MCP server with SharePoint, OneDrive, Outlook and Teams tools.
+
+**How is this different from Claude's Microsoft 365 connector?** The connector covers a fixed set of read features. M365 Bridge lets the admin choose the full delegated Graph scope, writes back to SharePoint with check-out and version notes, and syncs folders for Claude Code to work on locally.
+
+**Can one person see another person's email or files?** No. Each person's token is their own, and Microsoft checks their access on every request. Admins choose who can use it at all.
+
+**Does it work in the Claude desktop app?** Yes. Claude Code (desktop and terminal) connects to the background service over HTTP; the Claude chat app runs the same tools locally.
+
+**What if two people edit the same document?** The second person's Claude sees the file is checked out and stops. If a file still changed on both sides, Claude merges the two into one file.
+
+**Is my firm's data sent anywhere else?** M365 Bridge talks only to Microsoft Graph and runs on your computer. Claude sees what you ask it to work on, under your Claude plan's terms.
 
 ## Status
 
-- **Tested:** an end-to-end suite (22 tests) against a fake Microsoft Graph. It covers check-out, check-in with notes, colleague locks, merges, moves, the edit hook, the HTTP connection and its key, and automatic firm setup.
-- **Verified on a Mac:** the background LaunchAgent (including restart after a crash) and Claude Code connecting over HTTP (`claude mcp list` shows Connected).
-- **Not yet tested on a real Microsoft 365 tenant or on Windows.** Try it on a trial tenant or a pilot group first.
-
-## Demo without a tenant
-
-```bash
-npm run demo
-```
-
-This runs the real page and tools against a fake Microsoft 365 with a synced matter folder, a file checked out to you, a colleague's update and a colleague's check-out. It opens at `http://localhost:4366` and never touches your real settings.
-
-## Development
+Beta. Tested end to end against a mock Microsoft Graph (28 tests, CI on Windows, macOS and Linux) and on a real law firm tenant (admin setup, sign-in, reads, sync). Run a pilot with a test folder before real matters.
 
 ```bash
 npm install
 npm test        # end-to-end against a mock Microsoft Graph
+npm run demo    # the real page against a fake Microsoft 365, at localhost:4366
 ```
 
-See [SETUP-ENTRA.md](SETUP-ENTRA.md) for the admin details and other ways to configure Entra.
+## Credits
+
+Built by [Irfad Imtiaz](https://github.com/irfad7) at [Clearfield Labs](https://github.com/clearfield-labs) ([clearfieldlabs.com](https://clearfieldlabs.com)) for [My Legal Academy](https://github.com/redwoodmeridian) ([mylegalacademy.com](https://mylegalacademy.com)) and the law firms in its AI Labs.
+
+If M365 Bridge saves your firm time, a star helps others find it.
+
+## License
+
+[MIT](LICENSE)

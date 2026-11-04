@@ -24,10 +24,19 @@ export function claudeDesktopConfig() {
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
+/** For editing: a missing file is {}, but a file that exists and does not parse is never overwritten. */
+function readJsonForEdit(file) {
+  if (!fs.existsSync(file)) return {};
+  const json = readJson(file);
+  if (!json) throw new Error(`${file} has a formatting error, so M365 Bridge left it alone. Fix it (or ask Claude to), then connect again.`);
+  return json;
+}
 function writeJson(file, json) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.m365-bridge.bak`);
-  fs.writeFileSync(file, JSON.stringify(json, null, 2));
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(json, null, 2));
+  fs.renameSync(tmp, file);
 }
 
 function findClaudeCli() {
@@ -81,7 +90,7 @@ export function registerClaudeCode() {
   } catch {
     // Desktop-only install, or an older CLI: edit ~/.claude.json directly.
     const file = claudeCodeConfig();
-    const json = readJson(file) || {};
+    const json = readJsonForEdit(file);
     json.mcpServers = { ...(json.mcpServers || {}), [SERVER_NAME]: spec };
     writeJson(file, json);
     how = `in ${file}`;
@@ -93,7 +102,7 @@ export function registerClaudeCode() {
 /** A PreToolUse hook: before Claude edits a file in a synced folder, check it out in SharePoint. */
 export function installHook() {
   const file = claudeSettings();
-  const json = readJson(file) || {};
+  const json = readJsonForEdit(file);
   json.hooks = json.hooks || {};
   const list = (json.hooks.PreToolUse || [])
     .map((m) => ({ ...m, hooks: (m.hooks || []).filter((h) => !isOurHook(h)) }))
@@ -106,7 +115,7 @@ export function installHook() {
 export function registerClaudeDesktop() {
   if (demo()) { demoState.desktop = true; return 'Demo: connected to Claude Desktop.'; }
   const file = claudeDesktopConfig();
-  const json = readJson(file) || {};
+  const json = readJsonForEdit(file);
   json.mcpServers = { ...(json.mcpServers || {}), [SERVER_NAME]: stdioSpec() };
   writeJson(file, json);
   return 'Connected to the Claude Desktop chat app. Quit and reopen it to load.';

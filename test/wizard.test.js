@@ -75,11 +75,11 @@ test('step 3: the team appears; choose people and give them access', async () =>
   const html = await page();
   assert.match(html, /Choose people/);
   assert.match(html, /Maria Lopez/);
-  assert.match(html, /Esau Caldwell/);
+  assert.match(html, /Evan Clarke/);
   assert.ok(mock.entra.assignments.some((a) => a.principalId === 'U-admin'), 'the admin gets access without picking themselves');
   assert.doesNotMatch(html, /value="U-admin"/, 'no checkbox for yourself');
-  await post('/admin/access', { ids: ['U-maria', 'U-esau'], restricted: 'on' });
-  assert.deepEqual(mock.entra.assignments.map((a) => a.principalId).sort(), ['U-admin', 'U-esau', 'U-maria']);
+  await post('/admin/access', { ids: ['U-maria', 'U-evan'], restricted: 'on' });
+  assert.deepEqual(mock.entra.assignments.map((a) => a.principalId).sort(), ['U-admin', 'U-evan', 'U-maria']);
   assert.equal(mock.entra.sps[0].appRoleAssignmentRequired, true);
 });
 
@@ -103,10 +103,10 @@ test('step 4: drafts in the admin Outlook, each with a personal setup code, then
 test('if the admin sign-in has ended, Give access signs in first and then finishes', async () => {
   const { endAdminSession } = await import('../src/provision.js');
   endAdminSession();
-  await post('/admin/access', { ids: ['U-esau'], restricted: 'on' });
+  await post('/admin/access', { ids: ['U-evan'], restricted: 'on' });
   const j = await waitJob();
   assert.equal(j.error, null);
-  assert.match(await page(), /Invite Esau Caldwell/);
+  assert.match(await page(), /Invite Evan Clarke/);
   await post('/admin/back', {});
 });
 

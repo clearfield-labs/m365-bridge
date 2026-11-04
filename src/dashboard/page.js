@@ -45,9 +45,20 @@ function shell(title, body, flash, s, view) {
     ? `<div class="me"><span class="avatar">${e(initials(s.account))}</span><span class="who"><b>${e(s.account.name || s.account.username)}</b><small>${e(s.account.username)}</small></span>${form('/signout', '<button class="link" type="submit">Sign out</button>', { back: view === 'admin' ? 'admin' : '' })}</div>`
     : '';
   const nav = s ? `<nav><a href="/"${view === 'home' ? ' aria-current="page"' : ''}>Home</a><a href="/admin"${view === 'admin' ? ' aria-current="page"' : ''}>Admin</a></nav>` : '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(title)}</title><link rel="stylesheet" href="/assets/app.css"></head>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(title)}</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/app.css"></head>
 <body><header class="bar"><a class="brand" href="/">${LOGO}<span>M365 Bridge</span></a>${s?.cfg?.firmName ? `<span class="firm">${e(s.cfg.firmName)}</span>` : ''}${nav}<span class="grow"></span>${who}</header>
-${toast}<main>${body}</main><script src="/assets/app.js"></script></body></html>`;
+${toast}<main>${body}</main>
+<footer class="foot"><span>Bookmark this page: <b>localhost:4365</b>. Or open the <b>M365 Bridge</b> app${process.platform === 'win32' ? ' from the Start menu' : process.platform === 'darwin' ? ' with Spotlight (⌘ Space)' : ''}.</span>
+<span>Made by <a href="https://clearfieldlabs.com" target="_blank" rel="noopener">Clearfield Labs</a> for <a href="https://mylegalacademy.com" target="_blank" rel="noopener">My Legal Academy</a></span></footer>
+<script src="/assets/app.js"></script></body></html>`;
+}
+
+/** Shown to a browser that has not been unlocked: no names, no files, no settings. */
+export function renderLocked() {
+  const where = process.platform === 'win32' ? 'the <b>M365 Bridge</b> shortcut in the Start menu' : process.platform === 'darwin' ? 'the <b>M365 Bridge</b> app (press ⌘ Space and type M365)' : 'the M365 Bridge shortcut';
+  return shell('M365 Bridge', `<section class="card"><div class="pad"><h1>Open M365 Bridge from its app</h1>
+<p>For your privacy, this page only opens in a browser M365 Bridge has unlocked. Open ${where} once, and this browser stays unlocked. Bookmarks keep working after that.</p>
+<p class="muted small">If you installed it just now, run the installer again or type <code>m365-bridge</code> in Terminal.</p></div></section>`, null);
 }
 
 export function renderMessage(title, html) {

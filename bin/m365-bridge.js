@@ -67,8 +67,14 @@ async function main() {
       await ensureDashboard();
       console.log(`M365 Bridge: ${DASHBOARD_URL}`);
       if (!already) console.log('Running in this window. Close it with Ctrl+C. (Run "m365-bridge install" to keep it running in the background.)');
-      if (!process.argv.includes('--no-open')) openBrowser(DASHBOARD_URL);
+      const { pageUrl } = await import('../src/config.js');
+      if (!process.argv.includes('--no-open')) openBrowser(pageUrl(DASHBOARD_URL));
       return;
+    }
+    case 'url': {
+      // The unlocking address for this computer (used by the M365 Bridge app).
+      const { pageUrl } = await import('../src/config.js');
+      return console.log(pageUrl(DASHBOARD_URL, process.argv[3] || ''));
     }
     case 'install': {
       const { ensureMcpToken } = await import('../src/config.js');
@@ -92,7 +98,8 @@ async function main() {
       }
       console.log(`\nM365 Bridge is running at ${DASHBOARD_URL}`);
       console.log('Next: paste your setup code and sign in (opening it now). Then restart Claude.');
-      if (!process.argv.includes('--no-open')) openBrowser(DASHBOARD_URL);
+      const { pageUrl } = await import('../src/config.js');
+      if (!process.argv.includes('--no-open')) openBrowser(pageUrl(DASHBOARD_URL));
       return;
     }
     case 'start': {

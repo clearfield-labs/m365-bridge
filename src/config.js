@@ -42,6 +42,18 @@ export function updateConfig(patch) {
   return cfg;
 }
 
+/** The page key: unlocks the M365 Bridge page in a browser on this computer (see dashboard/server.js). */
+export function ensurePageKey() {
+  const cfg = loadConfig();
+  if (cfg.pageKey) return cfg.pageKey;
+  const key = crypto.randomBytes(24).toString('base64url');
+  updateConfig({ pageKey: key });
+  return key;
+}
+
+/** The address to open the page with, unlocking it in that browser. */
+export const pageUrl = (base, p = '') => `${base}${p}${p.includes('?') ? '&' : '?'}k=${encodeURIComponent(ensurePageKey())}`;
+
 /** The key Claude Code presents to the background server. Created once per computer. */
 export function ensureMcpToken() {
   const cfg = loadConfig();

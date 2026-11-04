@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { loadConfig, isConfigured } from './config.js';
+import { loadConfig, isConfigured, pageUrl } from './config.js';
 import { currentAccount, startDeviceCodeSignIn, deviceCodeState, NotSignedInError, grantedScopes } from './auth.js';
 import { hasPack } from './scopes.js';
 import { GRAPH, graph, graphAll, resolveItem, listChildren, downloadItem, uploadBytes, createFolder, moveItem, summarize, refOf, personOf } from './graph.js';
@@ -139,14 +139,14 @@ export function createServer() {
         return `${msg}\nAfter you finish in the browser, call status to confirm.`;
       }
       await ensureDashboard();
-      openBrowser(`${DASHBOARD_URL}auth/start`);
+      openBrowser(pageUrl(DASHBOARD_URL, 'auth/start'));
       return 'I opened the Microsoft sign-in page in the browser. Finish signing in there, then call status to confirm.';
     },
   );
 
   tool(server, 'open_dashboard', 'Open the M365 Bridge page in the browser (setup, sign-in, files checked out to you, synced folders).', {}, async () => {
     await ensureDashboard();
-    openBrowser(DASHBOARD_URL);
+    openBrowser(pageUrl(DASHBOARD_URL));
     return `Opened ${DASHBOARD_URL}`;
   });
 
@@ -602,8 +602,14 @@ function registerGraphRequest(server) {
         rel = rel.slice(graphOrigin.length).replace(/^\/(v1\.0|beta)/, '');
       }
       if (!rel.startsWith('/')) rel = `/${rel}`;
-      const isSearch = method === 'POST' && /^\/search\/query/.test(rel);
-      if (method === 'DELETE' && !cfg.allowDelete) throw new Error('Deleting through Microsoft Graph is turned off for this firm. An admin can allow it in the dashboard.');
+      // Judge the path Graph will actually receive ("/search/query/../../me/sendMail" is sendMail).
+      const resolved = new URL(`${graphOrigin}/${version}${rel}`);
+      if (resolved.origin !== graphOrigin) throw new Error('graph_request only talks to Microsoft Graph.');
+      rel = resolved.pathname.replace(/^\/(v1\.0|beta)/, '') + resolved.search;
+      const pathOnly = resolved.pathname.replace(/^\/(v1\.0|beta)/, '').toLowerCase();
+      const isSearch = method === 'POST' && pathOnly === '/search/query';
+      const deleteLike = method === 'DELETE' || /\/(permanentdelete|discardcheckout)$/.test(pathOnly) || pathOnly === '/$batch';
+      if (deleteLike && !cfg.allowDelete) throw new Error('Deleting through Microsoft Graph is turned off for this firm (this includes batch requests). An admin can allow it.');
       if (method !== 'GET' && !isSearch && !cfg.allowWrite) throw new Error('This firm set M365 Bridge to read-only.');
       const res = await graph(`${graphOrigin}/${version}${rel}`, { method, body, raw: true });
       audit({ tool: 'graph_request', method, path: rel.split('?')[0] });

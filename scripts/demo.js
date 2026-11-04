@@ -7,7 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createMockGraph } from '../test/mock-graph.js';
 
-const home = path.join(os.tmpdir(), 'm365-bridge-demo');
+// Under the home folder so paths read like a real install (~/...). Deleted and recreated each run.
+const home = path.join(os.homedir(), '.m365-bridge-demo');
 fs.rmSync(home, { recursive: true, force: true });
 
 const mock = createMockGraph({ user: { name: 'Jordan Avery', email: 'jordan.avery@demofirm.com' } });

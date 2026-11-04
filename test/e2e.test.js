@@ -292,17 +292,24 @@ test('mail tools and graph_request', async () => {
   assert.match(chats.text, /Henderson team/);
   const del = await call('graph_request', { method: 'DELETE', path: '/me/messages/M1' });
   assert.ok(del.isError);
+  const batch = await call('graph_request', { method: 'POST', path: '/$batch', body: { requests: [{ id: '1', method: 'DELETE', url: '/me/messages/M1' }] } });
+  assert.ok(batch.isError, 'batch requests count as deletes when deletes are off');
+  const sneaky = await call('graph_request', { method: 'POST', path: '/search/query/../../drives/x/items/y/permanentDelete' });
+  assert.ok(sneaky.isError);
+  assert.match(sneaky.text, /Deleting/);
   const evil = await call('graph_request', { path: 'https://evil.example.com/steal' });
   assert.match(evil.text, /only talks to Microsoft Graph/);
 });
 
 test('background service: Claude Code connects over HTTP with its key; browsers and strangers cannot', async () => {
   // Give this computer a Claude key, the way install does.
-  const { ensureMcpToken } = await (async () => {
+  const { ensureMcpToken, ensurePageKey } = await (async () => {
     Object.assign(process.env, { M365_BRIDGE_HOME: env.M365_BRIDGE_HOME, M365_BRIDGE_KEYSTORE: 'file', M365_BRIDGE_PORT: PORT });
     return import('../src/config.js');
   })();
   const token = ensureMcpToken();
+  const pageKey = ensurePageKey();
+  const cookie = `m365b=${pageKey}`;
   background = spawn(process.execPath, [CLI, 'background'], { env, stdio: 'ignore' });
   for (let i = 0; i < 50; i++) {
     try { if ((await fetch(`http://127.0.0.1:${PORT}/healthz`)).ok) break; } catch { /* starting */ }
@@ -323,7 +330,19 @@ test('background service: Claude Code connects over HTTP with its key; browsers 
   assert.equal((await fetch(url, { method: 'POST', headers: { ...headers, Authorization: `Bearer ${token}`, Origin: 'https://evil.example.com' }, body })).status, 403, 'web pages refused');
 
   // Our own page's forms: some browsers send "Origin: null" with Sec-Fetch-Site same-origin.
-  const form = (headers) => fetch(`http://127.0.0.1:${PORT}/workspace/forget`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: 'localPath=%2Fnowhere' }).then((r) => r.status);
+  // The page is locked until a browser is unlocked with the page key (shared-computer safety).
+  const locked = await fetch(`http://127.0.0.1:${PORT}/`);
+  assert.equal(locked.status, 401);
+  assert.doesNotMatch(await locked.text(), /Henderson|Synced folders/, 'nothing private on the locked page');
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/api/browse?ref=onedrive`)).status, 401);
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/?k=wrong`, { redirect: 'manual' })).status, 401);
+  const unlock = await fetch(`http://127.0.0.1:${PORT}/admin?k=${encodeURIComponent(pageKey)}`, { redirect: 'manual' });
+  assert.equal(unlock.status, 303);
+  assert.equal(unlock.headers.get('location'), '/admin');
+  assert.match(unlock.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/workspace/forget`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Sec-Fetch-Site': 'same-origin' }, body: 'localPath=x' })).status, 401, 'no cookie, no actions');
+
+  const form = (headers) => fetch(`http://127.0.0.1:${PORT}/workspace/forget`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie, ...headers }, body: 'localPath=%2Fnowhere' }).then((r) => r.status);
   assert.equal(await form({ Origin: 'null', 'Sec-Fetch-Site': 'same-origin' }), 303, 'own form with Origin null');
   assert.equal(await form({ Origin: `http://localhost:${PORT}`, 'Sec-Fetch-Site': 'same-origin' }), 303, 'own form');
   assert.equal(await form({ Origin: 'null' }), 403, 'opaque origin without fetch metadata');
@@ -331,7 +350,7 @@ test('background service: Claude Code connects over HTTP with its key; browsers 
   assert.equal(await form({ 'Sec-Fetch-Site': 'cross-site' }), 403, 'other site without Origin');
 
   // Folder picker: browse OneDrive and SharePoint sites as the signed-in person.
-  const api = async (p) => (await (await fetch(`http://127.0.0.1:${PORT}${p}`, { headers: { 'Sec-Fetch-Site': 'same-origin' } })).json()).data;
+  const api = async (p) => (await (await fetch(`http://127.0.0.1:${PORT}${p}`, { headers: { 'Sec-Fetch-Site': 'same-origin', Cookie: cookie } })).json()).data;
   const od = await api('/api/browse?ref=onedrive');
   assert.equal(od.syncable, false, 'the whole OneDrive is not offered for syncing');
   const matters = od.folders.find((f) => f.name === 'Matters');
@@ -342,9 +361,9 @@ test('background service: Claude Code connects over HTTP with its key; browsers 
   assert.ok(pl.sites.some((x) => x.name === 'Litigation'));
   const site = await api('/api/browse?ref=site:site1');
   assert.equal(site.title, 'Litigation', 'a site with one library opens straight into it');
-  assert.equal((await fetch(`http://127.0.0.1:${PORT}/api/browse?ref=onedrive`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/api/browse?ref=onedrive`, { headers: { 'Sec-Fetch-Site': 'cross-site', Cookie: cookie } })).status, 403);
 
-  const page = await (await fetch(`http://127.0.0.1:${PORT}/`)).text();
+  const page = await (await fetch(`http://127.0.0.1:${PORT}/`, { headers: { Cookie: cookie } })).text();
   assert.match(page, /Checked out to you/);
   assert.match(page, /Synced folders/);
 });

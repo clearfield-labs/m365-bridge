@@ -2,6 +2,7 @@
 // (macOS Keychain, Windows DPAPI). Files on disk hold only AES-256-GCM ciphertext.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FILES, HOME, writePrivate } from './paths.js';
 
@@ -29,8 +30,11 @@ function keychainGet() {
     });
     const hex = out.toString().trim();
     return /^[0-9a-f]{64}$/.test(hex) ? Buffer.from(hex, 'hex') : null;
-  } catch {
-    return null;
+  } catch (e) {
+    // Exit 44 = no such item: there is no key yet. Anything else (locked keychain, timeout)
+    // is a failure to READ an existing key, and must never be mistaken for "no key".
+    if (e.status === 44) return null;
+    throw new Error(`Could not read the M365 Bridge key from the macOS Keychain (${e.code || e.status || e.message}). Unlock the Mac and try again.`);
   }
 }
 function keychainSet(key) {
@@ -65,8 +69,8 @@ function dpapiGet() {
   if (!fs.existsSync(FILES.dpapiKey)) return null;
   try {
     return Buffer.from(dpapi('Unprotect', fs.readFileSync(FILES.dpapiKey, 'utf8')), 'base64');
-  } catch {
-    return null;
+  } catch (e) {
+    throw new Error(`Could not unlock the M365 Bridge key with Windows (${e.code || e.message}). Try again in a moment.`);
   }
 }
 function dpapiSet(key) {
@@ -93,10 +97,15 @@ export function getMasterKey() {
     file: [fileGet, fileSet],
   };
   const [get, set] = stores[b] || stores.file;
+  const hasData = fs.existsSync(FILES.config) || fs.existsSync(FILES.tokens);
   let key = null;
   try {
     key = get();
-  } catch { /* fall through */ }
+  } catch (e) {
+    // The key exists but could not be read right now. Creating a new one would make the saved
+    // settings unreadable for good, so fail this call instead and let the next one try again.
+    if (hasData && !(b !== 'file' && fileGet())) throw e;
+  }
   if (key) {
     storageLabel = LABELS[b];
   } else if (b !== 'file' && fileGet()) {
@@ -142,13 +151,18 @@ export function decrypt(blob) {
   return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
 }
 
-/** Read and decrypt a file. Returns null if missing or unreadable (e.g. the key was reset). */
+/**
+ * Read and decrypt a file. Missing file -> null. A file that exists but will not decrypt is an
+ * error, never "empty": treating it as empty would let the next save overwrite real settings.
+ */
 export function readEncrypted(file) {
   if (!fs.existsSync(file)) return null;
+  const blob = fs.readFileSync(file, 'utf8');
   try {
-    return decrypt(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return null;
+    return decrypt(blob);
+  } catch (e) {
+    if (/Keychain|Windows/.test(e.message)) throw e;
+    throw new Error(`${path.basename(file)} could not be decrypted (the encryption key changed). Run "m365-bridge reset" and set up again.`);
   }
 }
 

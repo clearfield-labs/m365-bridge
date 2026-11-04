@@ -208,8 +208,8 @@ export async function grantAccess({ appId, ids, restricted = true }) {
 // ---------------------------------------------------------------------------
 // Invitations
 
-export const INSTALL_MAC = 'curl -fsSL https://raw.githubusercontent.com/irfad7/m365-bridge/main/install.sh | bash';
-export const INSTALL_WIN = 'irm https://raw.githubusercontent.com/irfad7/m365-bridge/main/install.ps1 | iex';
+export const INSTALL_MAC = 'curl -fsSL https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.sh | bash';
+export const INSTALL_WIN = 'irm https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.ps1 | iex';
 
 export const DEFAULT_SUBJECT = 'Claude now works with our Microsoft 365';
 export const DEFAULT_MESSAGE = `Hi {first_name},
@@ -227,7 +227,7 @@ I've connected Claude to our Microsoft 365. It signs in as you, so it only sees 
 
 3. Click "Sign in with Microsoft", then restart Claude.
 
-You can also ask Claude Code: "Install M365 Bridge from https://github.com/irfad7/m365-bridge and set it up with this code: {setup_code}"
+You can also ask Claude Code: "Install M365 Bridge from https://github.com/clearfield-labs/m365-bridge and set it up with this code: {setup_code}"
 
 {admin_name}`;
 

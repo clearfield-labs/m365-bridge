@@ -37,12 +37,17 @@ export async function runHook() {
   const target = path.resolve(input.cwd || process.cwd(), file);
   if (!insideSyncedFolder(target)) return;
 
-  const ws = await import('./workspace.js');
-  const hit = ws.locateLocalFile(target);
-  if (!hit || !hit.known || hit.known.lock) return; // not ours, new file, or already checked out to you
-  if (hit.known.merge) {
-    return decide('deny', `SharePoint has a newer version of ${hit.rel}${hit.known.merge.by ? ` from ${hit.known.merge.by}` : ''}. Call the m365 workspace_merge tool for this file first.`);
+  let ws;
+  let hit;
+  try {
+    ws = await import('./workspace.js');
+    hit = ws.locateLocalFile(target);
+  } catch (e) {
+    // Inside a synced folder but its record could not be read: stop rather than edit unlocked.
+    return decide('deny', `Could not read this synced folder's record (${e.message}). Try again in a moment.`);
   }
+  if (!hit || !hit.known || hit.known.lock) return; // not ours, new file, or already checked out to you
+  if (hit.known.merge) return; // a merge is open: Claude is writing the merged file
   try {
     const r = await ws.lock({ localPath: hit.root, files: [hit.rel] });
     if (r.held_by_others.length) {

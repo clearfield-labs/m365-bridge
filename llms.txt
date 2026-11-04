@@ -1,0 +1,18 @@
+# M365 Bridge
+
+> M365 Bridge is an open-source Microsoft 365 MCP server for Claude Code and Claude Desktop. It connects Claude to SharePoint, OneDrive, Outlook, Teams, calendars, To Do, Planner and OneNote, signed in as each person with delegated Microsoft Graph permissions. Shared SharePoint and OneDrive folders sync like git, with SharePoint check-out before edits and check-in with a note after, so two people never overwrite each other. Built for law firms and other professional firms that keep their work in Microsoft 365. MIT licensed. Made by Clearfield Labs (Irfad Imtiaz) for My Legal Academy.
+
+## Docs
+- [README](https://github.com/clearfield-labs/m365-bridge#readme): what it does, install, admin setup, tools, security, FAQ
+- [Admin setup and Entra details](https://github.com/clearfield-labs/m365-bridge/blob/main/SETUP-ENTRA.md): one-click firm setup, manual Entra steps, permission packs, other Entra models
+- [Changelog](https://github.com/clearfield-labs/m365-bridge/blob/main/changelog.md)
+- [Security policy](https://github.com/clearfield-labs/m365-bridge/blob/main/SECURITY.md)
+
+## Key facts
+- Install (Mac): `curl -fsSL https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.sh | bash`
+- Install (Windows): `irm https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.ps1 | iex`
+- Runs locally as a background service; Claude Code connects over HTTP MCP at 127.0.0.1:4365/mcp; the page is at http://localhost:4365
+- Delegated access only: each person reaches only what they can already open in Microsoft 365. No client secrets on laptops.
+- Admin wizard: choose permissions, approve once, choose people from the directory, send invitation emails with personal setup codes from the admin's Outlook
+- MCP tools: search, list_places, list_folder, read_file, download, upload, move, versions, restore_version, workspace_pull, workspace_status, workspace_lock, workspace_push, workspace_merge, workspace_release, workspace_move, mail_search, mail_read, mail_draft, calendar_view, graph_request, firm_setup, setup, sign_in, status
+- Works on macOS, Windows and Linux with Node.js 18+

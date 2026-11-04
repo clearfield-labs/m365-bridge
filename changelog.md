@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.0 (2026-11-04)
+
+Hardening from a QA review and read-only tests on a real law firm tenant.
+
+- security: the page and its API only answer a browser unlocked with this computer's page key (HttpOnly cookie), so other users on a shared computer (Remote Desktop, Citrix, fast user switching) cannot open it. The M365 Bridge app, shortcuts, installer and Claude open it unlocked; bookmarks keep working afterwards
+- security: `graph_request` judges the path Graph will receive (no `..` tricks past read-only), and treats `$batch`, `permanentDelete` and `discardCheckout` as deletes
+- fix: a key store that is slow or locked (Keychain before unlock, slow DPAPI) no longer leads to a new encryption key and reset settings; undecryptable settings are an error, never "empty"
+- fix: the sync record is written atomically and merged per file, so the background service, Claude's tools and the edit hook can work on one folder at once without losing each other's changes
+- fix: a check-out is recorded the moment it succeeds; one failing file no longer orphans the others' check-outs
+- fix: a refused check-out on a file that is checked out is treated as someone else's, never as yours
+- fix: release only discards a check-out that is still in place
+- fix: push records the upload before check-in; a failed check-in is reported and the file stays listed as checked out to you (also for new files in libraries that require check-out)
+- fix: a cut-off folder listing (very large folders) is never treated as deletions; skipped OneNote and oversized files count as present
+- fix: renames that only change letter case no longer delete the local copy; `workspace_move` allows them
+- fix: a file open in Word on Windows no longer aborts the whole pull; move falls back cleanly if the local copy is busy
+- fix: an open merge with no local edits resolves to SharePoint's version on pull; the edit hook lets Claude write the merged file
+- fix: libraries without check-out no longer hide colleagues' changes
+- fix: change detection keeps working when SharePoint adds a file's hash a moment after upload
+- fix: Claude's config files are never overwritten when they contain a formatting error, and are written atomically
+- fix: Windows start-up script is UTF-16 so profile names like José work
+- feat: pull downloads new files four at a time
+- feat: "M365 Bridge" app on the Mac (Spotlight and Launchpad) and Start menu and desktop shortcuts on Windows; favicon; footer with the bookmark address
+- feat: OneNote section files are skipped, not synced
+- docs: repo moved to clearfield-labs/m365-bridge; new README, llms.txt, SECURITY.md, CONTRIBUTING.md; credits to Irfad Imtiaz, Clearfield Labs and My Legal Academy
+
 ## 0.6.1 (2026-11-04)
 
 - fix: `list_places` no longer fails for an account without OneDrive (for example an unlicensed admin account); it still lists SharePoint sites, falls back to all visible sites when none are followed, and says plainly when no sites are visible

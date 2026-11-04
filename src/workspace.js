@@ -48,8 +48,19 @@ const toPosix = (p) => p.split(path.sep).join('/');
 const clean = (rel) => toPosix(String(rel)).replace(/^\.\//, '').replace(/^\/+/, '');
 const abs = (root, rel, dir = '') => path.join(root, dir, ...rel.split('/'));
 const now = () => new Date().toISOString();
-const knownTag = (known) => known.tag || known.cTag || known.eTag;
-const remoteChanged = (item, known) => contentTag(item) !== knownTag(known);
+// Compare content, not metadata. Prefer quickXorHash when both sides have it; SharePoint can add
+// the hash a moment after an upload, so fall back to the content tag (cTag) rather than flag a change.
+const qxOf = (item) => item?.file?.hashes?.quickXorHash || null;
+function sameContent(item, rec) {
+  if (!rec) return false;
+  if (rec.qx !== undefined) {
+    const qx = qxOf(item);
+    if (qx && rec.qx) return qx === rec.qx;
+    return (item.cTag || item.eTag) === (rec.cTag || rec.eTag);
+  }
+  return contentTag(item) === (rec.tag || rec.cTag || rec.eTag); // manifests from before 0.7
+}
+const remoteChanged = (item, known) => !sameContent(item, known);
 const isCheckedOut = (item) => item?.publication?.level === 'checkout';
 
 export function safeName(name) {
@@ -61,12 +72,47 @@ function readManifest(root) {
   if (!fs.existsSync(file)) {
     throw new Error(`${root} is not a synced folder yet. Run workspace_pull with a SharePoint or OneDrive folder link first.`);
   }
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  const m = JSON.parse(fs.readFileSync(file, 'utf8'));
+  Object.defineProperty(m, '_snap', { value: snapshot(m), enumerable: false, writable: true });
+  return m;
 }
+const snapshot = (m) => Object.fromEntries(Object.entries(m.files).map(([k, v]) => [k, JSON.stringify(v)]));
 
+/**
+ * Save the manifest. The background service, Claude's tools and the edit hook can all work on the
+ * same folder at once, so re-read what is on disk and apply only the entries this operation
+ * changed. Written atomically, so a reader never sees half a file.
+ */
 function writeManifest(root, m) {
-  fs.mkdirSync(path.join(root, META_DIR), { recursive: true });
-  fs.writeFileSync(path.join(root, MANIFEST), JSON.stringify(m, null, 2));
+  const file = path.join(root, MANIFEST);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let out = m;
+  if (m._snap && fs.existsSync(file)) {
+    let disk = null;
+    try { disk = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* unreadable: ours wins */ }
+    if (disk?.files) {
+      for (const k of new Set([...Object.keys(m._snap), ...Object.keys(m.files)])) {
+        const mine = m.files[k] === undefined ? undefined : JSON.stringify(m.files[k]);
+        if (mine === m._snap[k]) continue; // not changed by this operation
+        if (mine === undefined) delete disk.files[k];
+        else disk.files[k] = m.files[k];
+      }
+      disk.source = m.source;
+      disk.version = m.version;
+      if (m.pulledAt) disk.pulledAt = m.pulledAt;
+      out = disk;
+    }
+  }
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
+  for (let i = 0; ; i++) {
+    try { fs.renameSync(tmp, file); break; } catch (e) {
+      if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) { fs.rmSync(tmp, { force: true }); throw e; }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  m.files = out.files;
+  m._snap = snapshot(out);
 }
 
 function writeAt(file, buf) {
@@ -83,6 +129,7 @@ function entryFor(item, hash) {
     eTag: item.eTag,
     cTag: item.cTag,
     tag: contentTag(item),
+    qx: qxOf(item),
     size: item.size,
     remoteModified: item.lastModifiedDateTime,
     hash,
@@ -93,22 +140,23 @@ function entryFor(item, hash) {
 async function walkRemote(driveId, rootId) {
   const files = new Map();
   const skipped = [];
+  const skippedRels = new Set(); // present in SharePoint but not synced (OneNote, too large)
   const queue = [['', rootId]];
   while (queue.length) {
     const [prefix, id] = queue.shift();
     for (const item of await listChildren(driveId, id)) {
       const rel = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.folder) queue.push([rel, item.id]);
-      else if (item.package) skipped.push(`${rel} (OneNote notebook, open it in OneNote)`);
-      else if (item.size > MAX_FILE_BYTES) skipped.push(`${rel} (larger than ${MAX_FILE_BYTES / 1024 / 1024} MB)`);
+      else if (item.package || /\.(one|onetoc2|onepkg)$/i.test(item.name)) { skipped.push(`${rel} (OneNote, open it in OneNote)`); skippedRels.add(rel); }
+      else if (item.size > MAX_FILE_BYTES) { skipped.push(`${rel} (larger than ${MAX_FILE_BYTES / 1024 / 1024} MB)`); skippedRels.add(rel); }
       else if (!isIgnored(rel)) files.set(rel, item);
       if (files.size >= MAX_FILES) {
         skipped.push(`stopped after ${MAX_FILES} files; pick a smaller folder`);
-        return { files, skipped };
+        return { files, skipped, skippedRels, complete: false };
       }
     }
   }
-  return { files, skipped };
+  return { files, skipped, skippedRels, complete: true };
 }
 
 function walkLocal(root) {
@@ -179,7 +227,7 @@ async function openMerge(root, manifest, rel, item) {
   const theirs = await downloadItem(driveId, item.id);
   writeAt(abs(root, rel, MERGE_DIR), theirs);
   const known = manifest.files[rel] || { itemId: item.id, hash: null, tag: null };
-  known.merge = { eTag: item.eTag, tag: contentTag(item), by: personOf(item) || undefined, at: now() };
+  known.merge = { eTag: item.eTag, cTag: item.cTag, qx: qxOf(item), tag: contentTag(item), by: personOf(item) || undefined, at: now() };
   manifest.files[rel] = known;
   return { file: rel, changed_by: known.merge.by, next: 'Call workspace_merge for this file.' };
 }
@@ -203,12 +251,15 @@ async function lockOne(root, manifest, rel) {
   } catch (e) {
     if (e.status === 423) return { status: 'held', by: holderOf(e.raw) || 'someone else' };
     if (e.status === 401 || e.status === 403 || e.status === 404 || !e.status) throw e;
-    // Some libraries do not support check-out. Fall back to version checks at push.
+    // Check-out refused for another reason. If the file is checked out, it is someone else's
+    // (we cannot prove it is ours), so never treat it as our lock. Otherwise the library does
+    // not support check-out: fall back to version checks at push.
     const it = await getItem(driveId, known.itemId);
-    real = isCheckedOut(it);
+    if (isCheckedOut(it)) return { status: 'held', by: holderOf(e.raw) || 'someone else' };
+    real = false;
   }
+  known.lock = { at: now(), real }; // recorded at once, so a later failure cannot orphan it
   const item = await getItem(driveId, known.itemId);
-  known.lock = { at: now(), real };
   if (!remoteChanged(item, known)) {
     known.eTag = item.eTag; // check-out changes the eTag but not the content
     return { status: real ? 'locked' : 'unsupported' };
@@ -230,10 +281,12 @@ export async function lock({ localPath, files }) {
   if (!loadConfig().allowWrite) throw new Error('This firm set M365 Bridge to read-only.');
   const root = path.resolve(localPath);
   const manifest = readManifest(root);
-  const report = { workspace: root, locked: [], already_yours: [], held_by_others: [], refreshed_first: [], needs_merge: [], no_lock_needed: [], lock_not_supported: [] };
+  const report = { workspace: root, locked: [], already_yours: [], held_by_others: [], refreshed_first: [], needs_merge: [], no_lock_needed: [], lock_not_supported: [], errors: [] };
+  try {
   for (const raw of files || []) {
     const rel = clean(raw);
-    const r = await lockOne(root, manifest, rel);
+    let r;
+    try { r = await lockOne(root, manifest, rel); } catch (e) { report.errors.push({ file: rel, error: e.message }); continue; }
     if (r.status === 'locked') report.locked.push(rel);
     else if (r.status === 'yours') report.already_yours.push(rel);
     else if (r.status === 'held') report.held_by_others.push({ file: rel, checked_out_to: r.by });
@@ -242,7 +295,9 @@ export async function lock({ localPath, files }) {
     else if (r.status === 'unsupported') report.lock_not_supported.push(rel);
     else report.no_lock_needed.push(rel);
   }
-  writeManifest(root, manifest);
+  } finally {
+    writeManifest(root, manifest);
+  }
   audit({ tool: 'workspace_lock', target: manifest.source.webUrl, locked: report.locked, held: report.held_by_others.length });
   return report;
 }
@@ -255,7 +310,9 @@ export async function release({ localPath, files }) {
   for (const [rel, known] of Object.entries(manifest.files)) {
     if (!known.lock || (only && !only.has(rel))) continue;
     try {
-      if (known.lock.real) await discardCheckout(manifest.source.driveId, known.itemId).catch((e) => { if (e.status !== 400) throw e; });
+      if (known.lock.real && isCheckedOut(await getItem(manifest.source.driveId, known.itemId))) {
+        await discardCheckout(manifest.source.driveId, known.itemId).catch((e) => { if (e.status !== 400) throw e; });
+      }
       delete known.lock;
       report.released.push(rel);
       const full = abs(root, rel);
@@ -296,29 +353,44 @@ export async function pull({ source, localPath, name } = {}) {
   const { driveId, itemId: rootId } = manifest.source;
   fs.mkdirSync(root, { recursive: true });
 
-  const { files: remote, skipped } = await walkRemote(driveId, rootId);
+  const { files: remote, skipped, skippedRels, complete } = await walkRemote(driveId, rootId);
   const report = {
     workspace: root, source: manifest.source.webUrl,
     downloaded: [], updated: [], unchanged: 0, kept_local_edits: [], needs_merge: [],
-    removed_in_sharepoint: [], held_by_others: [], skipped,
+    removed_in_sharepoint: [], held_by_others: [], skipped, errors: [],
   };
+  // A fresh entry for a file, keeping a lock this person holds.
+  const keep = (rel, item, hash) => {
+    const prev = manifest.files[rel];
+    manifest.files[rel] = { ...entryFor(item, hash), ...(prev?.lock ? { lock: prev.lock } : {}) };
+    dropMergeCopy(root, rel);
+  };
+
+  // New files: download a few at a time (each Microsoft request can take a second or two).
+  const fresh = [...remote].filter(([rel]) => !fs.existsSync(abs(root, rel)));
+  await pool(fresh, 4, async ([rel, item]) => {
+    try {
+      const buf = await downloadItem(driveId, item.id);
+      writeLocal(root, rel, buf);
+      writeBase(root, rel, buf);
+      keep(rel, item, sha256(buf));
+      report.downloaded.push(rel);
+    } catch (e) {
+      report.errors.push({ file: rel, error: e.message });
+    }
+  });
+  const freshSet = new Set(fresh.map(([rel]) => rel));
 
   for (const [rel, item] of remote) {
     const full = abs(root, rel);
     const known = manifest.files[rel];
     if (isCheckedOut(item) && !known?.lock) report.held_by_others.push({ file: rel });
-
-    if (!fs.existsSync(full)) {
-      const buf = await downloadItem(driveId, item.id);
-      writeLocal(root, rel, buf);
-      writeBase(root, rel, buf);
-      manifest.files[rel] = entryFor(item, sha256(buf));
-      report.downloaded.push(rel);
-      continue;
-    }
-    if (known?.lock) { report.unchanged++; continue; } // you hold it; nobody else can change it
+    if (freshSet.has(rel)) continue;
+    if (known?.lock?.real) { report.unchanged++; continue; } // checked out to you: nobody else can change it
+    try {
     const localHash = hashFile(full);
-    if (known && !known.merge) {
+    // A merge left open with no local edits: just take SharePoint's version.
+    if (known && (!known.merge || localHash === known.hash)) {
       const changedThere = remoteChanged(item, known);
       const changedHere = localHash !== known.hash;
       if (!changedThere) {
@@ -330,12 +402,12 @@ export async function pull({ source, localPath, name } = {}) {
         const buf = await downloadItem(driveId, item.id);
         writeLocal(root, rel, buf);
         writeBase(root, rel, buf);
-        manifest.files[rel] = entryFor(item, sha256(buf));
+        keep(rel, item, sha256(buf));
         report.updated.push({ file: rel, by: personOf(item) || undefined });
         continue;
       }
     }
-    if (known?.merge && known.merge.tag === contentTag(item)) {
+    if (known?.merge && sameContent(item, known.merge)) {
       report.needs_merge.push({ file: rel, changed_by: known.merge.by, next: 'Call workspace_merge for this file.' });
       continue;
     }
@@ -343,18 +415,29 @@ export async function pull({ source, localPath, name } = {}) {
     const buf = await downloadItem(driveId, item.id);
     if (sha256(buf) === localHash) {
       writeBase(root, rel, buf);
-      manifest.files[rel] = entryFor(item, localHash);
+      keep(rel, item, localHash);
       report.unchanged++;
       continue;
     }
     report.needs_merge.push(await openMerge(root, manifest, rel, item));
+    } catch (e) {
+      // For example a file open in Word on Windows. Report it and carry on with the rest.
+      report.errors.push({ file: rel, error: /EBUSY|EPERM/.test(e.code || e.message) ? 'The file is open in another app. Close it and get latest again.' : e.message });
+    }
   }
 
   // Files that SharePoint no longer has were moved or deleted there (it keeps them in its
   // recycle bin). Drop untouched local copies; keep any you edited.
-  for (const [rel, known] of Object.entries(manifest.files)) {
-    if (remote.has(rel)) continue;
+  // Only when the listing was complete: a cut-off listing must never look like a deletion.
+  const remoteLower = new Set([...remote.keys()].map((k) => k.toLowerCase()));
+  for (const [rel, known] of Object.entries(complete ? manifest.files : {})) {
+    if (remote.has(rel) || skippedRels.has(rel)) continue;
     const full = abs(root, rel);
+    if (remoteLower.has(rel.toLowerCase())) {
+      // Renamed in SharePoint by letter case only. On Mac and Windows it is the same file on disk.
+      delete manifest.files[rel];
+      continue;
+    }
     const edited = fs.existsSync(full) && hashFile(full) !== known.hash;
     if (edited || known.lock) { report.kept_local_edits.push(rel); continue; }
     fs.rmSync(full, { force: true });
@@ -371,6 +454,14 @@ export async function pull({ source, localPath, name } = {}) {
   rememberWorkspace(root, manifest.source);
   audit({ tool: 'workspace_pull', target: manifest.source.webUrl, local: root, downloaded: report.downloaded.length + report.updated.length, needs_merge: report.needs_merge.length });
   return report;
+}
+
+async function pool(items, size, fn) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (i < items.length) await fn(items[i++]);
+  });
+  await Promise.all(workers);
 }
 
 function removeEmptyDirs(root) {
@@ -414,7 +505,7 @@ export async function status({ localPath, checkRemote = true }) {
       const known = manifest.files[rel];
       if (isCheckedOut(item) && !known?.lock) report.held_by_others.push({ file: rel });
       if (!known) report.new_in_sharepoint.push(rel);
-      else if (!known.lock && !known.merge && remoteChanged(item, known)) report.changed_in_sharepoint.push({ file: rel, by: personOf(item) || undefined });
+      else if (!known.lock?.real && !known.merge && remoteChanged(item, known)) report.changed_in_sharepoint.push({ file: rel, by: personOf(item) || undefined });
     }
   }
   report.tracked_files = Object.keys(manifest.files).length;
@@ -446,7 +537,7 @@ export async function merge({ localPath, file }) {
   if (!known) throw new Error(`${rel} is not a SharePoint file in this folder.`);
   const { driveId } = manifest.source;
   const item = await getItem(driveId, known.itemId);
-  if (!known.merge || known.merge.tag !== contentTag(item)) {
+  if (!known.merge || !sameContent(item, known.merge)) {
     const full = abs(root, rel);
     const changedHere = fs.existsSync(full) && hashFile(full) !== known.hash;
     if (!known.merge && !(remoteChanged(item, known) && changedHere)) {
@@ -517,8 +608,7 @@ export async function push({ localPath, files, note, merged = [] }) {
       if (r.status === 'held') { report.held_by_others.push({ file: rel, checked_out_to: r.by }); continue; }
       if (r.status === 'needs_merge') { report.needs_merge.push({ file: rel, changed_by: r.by, next: 'Call workspace_merge for this file.' }); continue; }
       const item = await getItem(driveId, known.itemId);
-      const expected = known.merge ? known.merge.tag : knownTag(known);
-      if (contentTag(item) !== expected) {
+      if (!sameContent(item, known.merge || known)) {
         report.needs_merge.push(await openMerge(root, manifest, rel, item));
         continue;
       }
@@ -530,11 +620,25 @@ export async function push({ localPath, files, note, merged = [] }) {
         if (e.status === 423) { report.held_by_others.push({ file: rel, checked_out_to: holderOf(e.raw) || 'someone else' }); continue; }
         throw e;
       }
-      if (known.lock?.real) await checkin(driveId, known.itemId, comment);
-      const fresh = await getItem(driveId, known.itemId);
-      manifest.files[rel] = entryFor(fresh, sha256(buf));
+      // Record the upload first, so a check-in failure cannot make it look like someone else's change.
+      const uploaded = await getItem(driveId, known.itemId);
+      const lockRec = known.lock;
+      manifest.files[rel] = { ...entryFor(uploaded, sha256(buf)), ...(lockRec ? { lock: lockRec } : {}) };
       writeBase(root, rel, buf);
       dropMergeCopy(root, rel);
+      if (lockRec?.real) {
+        try {
+          await checkin(driveId, known.itemId, comment);
+          delete manifest.files[rel].lock;
+        } catch (e) {
+          report.errors.push({ file: rel, error: `Uploaded, but SharePoint did not check it back in (${e.message}). It is still checked out to you; colleagues will not see the new version until it is checked in.` });
+          continue;
+        }
+      } else {
+        delete manifest.files[rel].lock;
+      }
+      const fresh = await getItem(driveId, known.itemId);
+      manifest.files[rel] = { ...entryFor(fresh, sha256(buf)), ...(manifest.files[rel].lock ? { lock: manifest.files[rel].lock } : {}) };
       report.uploaded.push({ file: rel, url: fresh.webUrl });
     } catch (e) {
       report.errors.push({ file: rel, error: e.message });
@@ -556,9 +660,11 @@ export async function push({ localPath, files, note, merged = [] }) {
         continue;
       }
       // Libraries that require check-out leave new files checked out (invisible to others).
-      await checkin(driveId, item.id, comment).catch(() => {});
+      let stillOut = null;
+      await checkin(driveId, item.id, comment).catch((e) => { if (e.status !== 400) stillOut = e; }); // 400 = was not checked out
       const fresh = await getItem(driveId, item.id);
-      manifest.files[rel] = entryFor(fresh, sha256(buf));
+      manifest.files[rel] = { ...entryFor(fresh, sha256(buf)), ...(stillOut ? { lock: { at: now(), real: true } } : {}) };
+      if (stillOut) report.errors.push({ file: rel, error: `Created, but SharePoint did not check it in (${stillOut.message}). It is checked out to you until it is.` });
       writeBase(root, rel, buf);
       report.created.push({ file: rel, url: fresh.webUrl });
     } catch (e) {
@@ -602,7 +708,8 @@ export async function move({ localPath, from, to }) {
   const src = clean(from).replace(/\/$/, '');
   const dst = clean(to).replace(/\/$/, '');
   if (!src || !dst || src === dst) throw new Error('Give a different "from" and "to", relative to the folder.');
-  if (fs.existsSync(abs(root, dst))) throw new Error(`${dst} already exists here.`);
+  const caseOnly = src.toLowerCase() === dst.toLowerCase();
+  if (!caseOnly && fs.existsSync(abs(root, dst))) throw new Error(`${dst} already exists here.`);
 
   const item = await graph(`/drives/${driveId}/items/${rootId}:/${enc(src)}?$select=${SELECT}`);
   const prefix = `${src}/`;
@@ -618,9 +725,16 @@ export async function move({ localPath, from, to }) {
   const moved = await moveItem(driveId, item.id, { parentId, name: dst.split('/').pop() });
 
   // Mirror locally.
-  if (fs.existsSync(abs(root, src))) {
-    fs.mkdirSync(path.dirname(abs(root, dst)), { recursive: true });
-    fs.renameSync(abs(root, src), abs(root, dst));
+  try {
+    if (fs.existsSync(abs(root, src))) {
+      fs.mkdirSync(path.dirname(abs(root, dst)), { recursive: true });
+      fs.renameSync(abs(root, src), abs(root, dst));
+    }
+  } catch (e) {
+    // Moved in SharePoint, but the local copy is busy (open in Word). The next "get latest"
+    // brings the moved file down and tidies the old one, so leave the record as it was.
+    audit({ tool: 'workspace_move', target: manifest.source.webUrl, from: src, to: dst, local: 'busy' });
+    return { moved: src, to: dst, url: moved.webUrl, note: 'Moved in SharePoint. The copy on this computer is open in another app; close it and get latest.' };
   }
   for (const dir of [BASE_DIR]) {
     if (fs.existsSync(abs(root, src, dir))) {

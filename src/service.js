@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
-import { CLI_PATH, FILES, HOME, NODE_PATH, ensureHome } from './paths.js';
+import { CLI_PATH, FILES, HOME, NODE_PATH, DASHBOARD_URL, ensureHome } from './paths.js';
+import { pageUrl } from './config.js';
 
 const LABEL = 'com.m365bridge.agent';
 const demo = () => process.env.M365_DEMO === '1' || process.env.M365_NO_SERVICE === '1';
@@ -39,9 +40,49 @@ export function serviceStatus() {
   return { installed, running: installed && tryRun('systemctl', ['--user', 'is-active', 'm365-bridge'])?.trim() === 'active', kind: 'systemd' };
 }
 
+// A way back to the page that doesn't need the address: an "M365 Bridge" app on the Mac
+// (Spotlight and Launchpad find it), Start menu and desktop shortcuts on Windows.
+const macApp = () => path.join(os.homedir(), 'Applications', 'M365 Bridge.app');
+const winShortcuts = () => [
+  path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'M365 Bridge.url'),
+  path.join(os.homedir(), 'Desktop', 'M365 Bridge.url'),
+];
+const linuxDesktop = () => path.join(os.homedir(), '.local', 'share', 'applications', 'm365-bridge.desktop');
+
+export function installShortcuts() {
+  if (demo()) return;
+  try {
+    if (process.platform === 'darwin') {
+      const as = (v) => `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      const cmd = `quoted form of ${as(NODE_PATH)} & " " & quoted form of ${as(CLI_PATH)}`;
+      const script = `try\n  do shell script ${cmd} & " start >/dev/null 2>&1"\nend try\nset u to ${as(DASHBOARD_URL)}\ntry\n  set u to do shell script ${cmd} & " url"\nend try\nopen location u`;
+      fs.mkdirSync(path.dirname(macApp()), { recursive: true });
+      fs.rmSync(macApp(), { recursive: true, force: true });
+      execFileSync('osacompile', ['-o', macApp(), '-e', script], { stdio: 'ignore', timeout: 30000 });
+    } else if (process.platform === 'win32') {
+      for (const f of winShortcuts()) {
+        fs.mkdirSync(path.dirname(f), { recursive: true });
+        // In this person's own profile, which other Windows users cannot read.
+        fs.writeFileSync(f, `[InternetShortcut]\r\nURL=${pageUrl(DASHBOARD_URL)}\r\n`);
+      }
+    } else {
+      fs.mkdirSync(path.dirname(linuxDesktop()), { recursive: true });
+      fs.writeFileSync(linuxDesktop(), `[Desktop Entry]\nType=Link\nName=M365 Bridge\nURL=${DASHBOARD_URL}\n`);
+    }
+  } catch { /* a shortcut is a convenience; never fail the install over it */ }
+}
+
+export function removeShortcuts() {
+  if (demo()) return;
+  fs.rmSync(macApp(), { recursive: true, force: true });
+  for (const f of winShortcuts()) fs.rmSync(f, { force: true });
+  fs.rmSync(linuxDesktop(), { force: true });
+}
+
 export function installService() {
   if (demo()) { demoInstalled = true; return 'Demo: background service turned on (nothing was installed).'; }
   ensureHome();
+  installShortcuts();
   const node = NODE_PATH;
   if (process.platform === 'darwin') {
     const env = { PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin', ...passEnv() };
@@ -76,7 +117,8 @@ export function installService() {
     const env = Object.entries(passEnv()).map(([k, v]) => `sh.Environment("Process")("${k}") = "${v.replace(/"/g, '""')}"\r\n`).join('');
     const vbs = `Set sh = CreateObject("WScript.Shell")\r\n${env}sh.Run """${node}"" ""${CLI_PATH}"" background", 0, False\r\n`;
     fs.mkdirSync(path.dirname(startupVbs()), { recursive: true });
-    fs.writeFileSync(startupVbs(), vbs);
+    // Windows Script Host reads UTF-16LE with a BOM correctly; plain UTF-8 breaks names like José.
+    fs.writeFileSync(startupVbs(), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(vbs, 'utf16le')]));
     spawn('wscript.exe', [startupVbs()], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     return 'Runs in the background and starts when you sign in to Windows.';
   }
@@ -91,6 +133,7 @@ export function installService() {
 
 export function uninstallService() {
   if (demo()) { demoInstalled = false; return 'Demo: background service turned off.'; }
+  removeShortcuts();
   if (process.platform === 'darwin') {
     tryRun('launchctl', ['bootout', `gui/${uid()}/${LABEL}`]);
     fs.rmSync(plistPath(), { force: true });

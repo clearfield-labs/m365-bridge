@@ -1,7 +1,7 @@
 # M365 Bridge installer for Windows (PowerShell).
 # Usage: irm <repo>/install.ps1 | iex     or     .\install.ps1 from a clone
 $ErrorActionPreference = 'Stop'
-$RepoUrl = if ($env:M365_BRIDGE_REPO) { $env:M365_BRIDGE_REPO } else { 'https://github.com/irfad7/m365-bridge.git' }
+$RepoUrl = if ($env:M365_BRIDGE_REPO) { $env:M365_BRIDGE_REPO } else { 'https://github.com/clearfield-labs/m365-bridge.git' }
 $Dest = if ($env:M365_BRIDGE_DIR) { $env:M365_BRIDGE_DIR } else { Join-Path $HOME '.m365-bridge-app' }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {

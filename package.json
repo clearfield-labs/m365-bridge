@@ -1,6 +1,6 @@
 {
   "name": "m365-bridge",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Use SharePoint and OneDrive folders as the source of truth for Claude Code, the way developers use GitHub.",
   "type": "module",
   "bin": {
@@ -22,5 +22,49 @@
     "mammoth": "^1.13.0",
     "unpdf": "^1.9.1",
     "zod": "^4.6.7"
-  }
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "claude-desktop",
+    "anthropic",
+    "microsoft-365",
+    "m365",
+    "office-365",
+    "sharepoint",
+    "onedrive",
+    "outlook",
+    "microsoft-teams",
+    "microsoft-graph",
+    "entra-id",
+    "law-firm",
+    "legal-tech",
+    "ai-agent",
+    "document-management"
+  ],
+  "homepage": "https://github.com/clearfield-labs/m365-bridge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clearfield-labs/m365-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/clearfield-labs/m365-bridge/issues"
+  },
+  "author": {
+    "name": "Irfad Imtiaz",
+    "url": "https://github.com/irfad7"
+  },
+  "contributors": [
+    {
+      "name": "Clearfield Labs",
+      "url": "https://clearfieldlabs.com"
+    },
+    {
+      "name": "My Legal Academy",
+      "url": "https://github.com/redwoodmeridian"
+    }
+  ]
 }

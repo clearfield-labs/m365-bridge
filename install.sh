@@ -2,7 +2,7 @@
 # M365 Bridge installer for macOS / Linux.
 # Usage: curl -fsSL <repo>/install.sh | bash     or     ./install.sh from a clone
 set -euo pipefail
-REPO_URL="${M365_BRIDGE_REPO:-https://github.com/irfad7/m365-bridge.git}"
+REPO_URL="${M365_BRIDGE_REPO:-https://github.com/clearfield-labs/m365-bridge.git}"
 DEST="${M365_BRIDGE_DIR:-$HOME/.m365-bridge-app}"
 
 if ! command -v node >/dev/null 2>&1; then

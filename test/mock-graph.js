@@ -10,7 +10,7 @@ export function createMockGraph({ token = 'test-token', user = { name: 'Test Use
     [token]: { id: 'U-test', displayName: user.name, userPrincipalName: user.email, mail: user.email },
     'admin-token': { id: 'U-admin', displayName: 'Firm Admin', userPrincipalName: 'admin@mockfirm.com', mail: 'admin@mockfirm.com' },
   };
-  const directory = [...Object.values(USERS), { id: 'U-maria', displayName: 'Maria Lopez', userPrincipalName: 'maria@mockfirm.com', mail: 'maria@mockfirm.com', jobTitle: 'Paralegal' }, { id: 'U-esau', displayName: 'Esau Caldwell', userPrincipalName: 'esau@mockfirm.com', mail: 'esau@mockfirm.com', jobTitle: 'Operations' }];
+  const directory = [...Object.values(USERS), { id: 'U-maria', displayName: 'Maria Lopez', userPrincipalName: 'maria@mockfirm.com', mail: 'maria@mockfirm.com', jobTitle: 'Paralegal' }, { id: 'U-evan', displayName: 'Evan Clarke', userPrincipalName: 'evan@mockfirm.com', mail: 'evan@mockfirm.com', jobTitle: 'Operations' }];
   const entra = { apps: [], sps: [], grants: [], assignments: [] };
   const GRAPH_APP = '00000003-0000-0000-c000-000000000000';
   const scopeNames = new Set(['User.Read']);

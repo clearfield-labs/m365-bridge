@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { PORT, DASHBOARD_URL, WORKSPACES_ROOT, PACKAGE_ROOT } from '../paths.js';
-import { loadConfig, updateConfig, isConfigured } from '../config.js';
+import { loadConfig, updateConfig, isConfigured, ensurePageKey } from '../config.js';
 import { currentAccount, startBrowserSignIn, finishBrowserSignIn, signOut } from '../auth.js';
 import { keyStorage } from '../vault.js';
 import { recentAudit, audit } from '../audit.js';
@@ -19,7 +19,7 @@ import { applyFirm, applySetupCode, currentSetupCode } from '../setup.js';
 import * as provision from '../provision.js';
 import { startProvision } from '../provision.js';
 import { openBrowser } from '../browser.js';
-import { renderPage, renderMessage } from './page.js';
+import { renderPage, renderMessage, renderLocked } from './page.js';
 import { PACKS, parseExtraScopes, adminConsentUrl } from '../scopes.js';
 
 export { openBrowser };
@@ -128,6 +128,18 @@ export function isCrossSite(req) {
   return false;
 }
 
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function pageUnlocked(req) {
+  if (process.env.M365_DEMO === '1') return true; // the demo has nothing private in it
+  const m = /(?:^|;\s*)m365b=([^;]+)/.exec(req.headers.cookie || '');
+  return !!m && safeEqual(m[1], ensurePageKey());
+}
+
 function bearerOk(req) {
   const token = loadConfig().mcpToken;
   const got = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1] || '';
@@ -152,13 +164,32 @@ async function handle(req, res) {
     return handleMcpHttp(req, res, body);
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/shutdown') {
+    if (foreignOrigin || !bearerOk(req)) return sendJson(res, 401, { error: 'no' });
+    sendJson(res, 200, { ok: true });
+    return setTimeout(() => process.exit(0), 100);
+  }
+
+  // The page and its API answer only a browser this person unlocked, so another user on a
+  // shared computer (Remote Desktop, Citrix, fast user switching) cannot open it.
+  const open = ['/healthz', '/favicon.svg', '/favicon.ico', '/assets/app.css', '/assets/app.js'];
+  if (!open.includes(url.pathname) && !pageUnlocked(req)) {
+    const key = url.searchParams.get('k');
+    if (req.method === 'GET' && key && safeEqual(key, ensurePageKey())) {
+      url.searchParams.delete('k');
+      res.writeHead(303, {
+        'Set-Cookie': `m365b=${ensurePageKey()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=157680000`,
+        Location: url.pathname + url.search,
+        'Cache-Control': 'no-store',
+      });
+      return res.end();
+    }
+    if (url.pathname.startsWith('/api/') || req.method !== 'GET') return sendJson(res, 401, { error: 'Open M365 Bridge from its app or shortcut first.' });
+    return send(res, 401, renderLocked());
+  }
+
   if (req.method === 'POST') {
     if (foreignOrigin) return send(res, 403, 'Forbidden origin');
-    if (url.pathname === '/api/shutdown') {
-      if (!bearerOk(req)) return sendJson(res, 401, { error: 'no' });
-      sendJson(res, 200, { ok: true });
-      return setTimeout(() => process.exit(0), 100);
-    }
     const body = parseForm(await readRaw(req));
     const back = body.back === 'admin' || url.pathname.startsWith('/admin') ? '/admin' : '/';
     try {
@@ -222,6 +253,10 @@ async function handle(req, res) {
       const j = provision.job;
       return sendJson(res, 200, { data: j ? { running: j.running, steps: j.steps.map((x) => x.text), error: j.error, done: !!j.result || !!j.signedIn, signInUrl: j.signInUrl } : null });
     }
+    case '/favicon.svg':
+    case '/favicon.ico':
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
+      return res.end(FAVICON);
     case '/assets/app.css':
     case '/assets/app.js':
       return sendStatic(res, path.basename(url.pathname));
@@ -230,6 +265,7 @@ async function handle(req, res) {
   }
 }
 
+const FAVICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0f6cbd"/><path d="M7 21c2.6-5.4 5.6-8 9-8s6.4 2.6 9 8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><path d="M6.5 21h19" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>';
 const STATIC_TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
 function sendStatic(res, name) {
   const file = path.join(PACKAGE_ROOT, 'src', 'dashboard', 'static', name);
