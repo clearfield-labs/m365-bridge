@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 (2026-11-04)
+
+- docs: install is one command in Terminal (Mac) or PowerShell (Windows); removed "ask Claude to install it" from the README and the invitation email, since the Claude chat app runs in the cloud and cannot install on the computer
+
 ## 0.7.0 (2026-11-04)
 
 Hardening from a QA review and read-only tests on a real law firm tenant.

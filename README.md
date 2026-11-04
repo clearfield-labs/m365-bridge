@@ -42,9 +42,6 @@ curl -fsSL https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/in
 irm https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.ps1 | iex
 ```
 
-**Or ask Claude Code:**
-> Install M365 Bridge from https://github.com/clearfield-labs/m365-bridge and set it up with this code: M365B-…
-
 The installer runs M365 Bridge in the background from login, connects Claude Code (and the Claude chat app if installed), adds an **M365 Bridge** app or shortcut, and opens `http://localhost:4365`. Run it again to update.
 
 Requires Node.js 18 or newer (the Windows installer installs it with winget).

@@ -227,8 +227,6 @@ I've connected Claude to our Microsoft 365. It signs in as you, so it only sees 
 
 3. Click "Sign in with Microsoft", then restart Claude.
 
-You can also ask Claude Code: "Install M365 Bridge from https://github.com/clearfield-labs/m365-bridge and set it up with this code: {setup_code}"
-
 {admin_name}`;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
