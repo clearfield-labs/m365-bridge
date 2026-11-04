@@ -26,7 +26,10 @@ export async function places(query = '') {
 /** One level of folders inside a place. ref: "onedrive" | "shared" | "site:<id>" | "<driveId>|<itemId>". */
 export async function browse(ref) {
   if (ref === 'onedrive') {
-    const root = await graph('/me/drive/root?$select=id,name,parentReference,webUrl');
+    const root = await graph('/me/drive/root?$select=id,name,parentReference,webUrl').catch((e) => {
+      if (e.status === 403 || e.status === 404) throw new Error('This account has no OneDrive. That usually means it has no Microsoft 365 licence with OneDrive. Pick a SharePoint site on the left instead.');
+      throw e;
+    });
     const driveId = root.parentReference?.driveId || (await graph('/me/drive?$select=id')).id;
     const kids = await listChildren(driveId, root.id, 1000);
     // The whole OneDrive is usually far too big to copy; pick a folder inside it.

@@ -179,14 +179,16 @@ export function createServer() {
         const drives = await graphAll(`/sites/${s.id}/drives`);
         return { site: s.displayName, url: s.webUrl, libraries: drives.map((d) => ({ name: d.name, ref: `${d.id}|root`, url: d.webUrl })) };
       }
-      const me = await graph('/me/drive?$select=id,name,webUrl');
-      const sites = search
+      // An account without a OneDrive licence has no OneDrive; still list the sites.
+      const me = await graph('/me/drive?$select=id,name,webUrl').catch(() => null);
+      let sites = search
         ? await graphAll(`/sites?search=${encodeURIComponent(search)}`, 50)
-        : await graphAll('/me/followedSites', 50);
+        : await graphAll('/me/followedSites', 50).catch(() => []);
+      if (!search && !sites.length) sites = await graphAll('/sites?search=*', 50).catch(() => []);
       return {
-        my_onedrive: { ref: `${me.id}|root`, url: me.webUrl },
+        my_onedrive: me ? { ref: `${me.id}|root`, url: me.webUrl } : 'This account has no OneDrive (usually no Microsoft 365 licence with OneDrive).',
         sites: sites.map((s) => ({ name: s.displayName, site: s.id, url: s.webUrl })),
-        tip: search ? undefined : 'These are sites you follow. Pass search to find others, or site to list a site\'s libraries.',
+        tip: sites.length ? (search ? undefined : 'Pass search to find other sites, or site to list a site\'s libraries.') : 'No SharePoint sites are visible to this account. People only see sites they are members of.',
       };
     },
   );

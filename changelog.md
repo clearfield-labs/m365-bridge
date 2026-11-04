@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1 (2026-11-04)
+
+- fix: `list_places` no longer fails for an account without OneDrive (for example an unlicensed admin account); it still lists SharePoint sites, falls back to all visible sites when none are followed, and says plainly when no sites are visible
+- fix: the folder picker explains a missing OneDrive instead of showing a raw error
+
 ## 0.6.0 (2026-11-04)
 
 - feat: "Sync a folder" is now a folder picker: My OneDrive, Shared with me and SharePoint sites (followed first, searchable) on the left, folders with a path bar on the right, and one "Sync <folder>" button. Pasting a link is still there as "Paste a link instead". `/#sync` opens it directly
