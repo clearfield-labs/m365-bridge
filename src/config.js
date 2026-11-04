@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { FILES } from './paths.js';
 import { readEncrypted, writeEncrypted } from './vault.js';
 import { DEFAULT_PACKS } from './scopes.js';
@@ -13,6 +14,7 @@ const DEFAULTS = {
   packs: DEFAULT_PACKS,
   extraScopes: '',
   workspaces: [], // { name, localPath, webUrl, driveId, itemId, lastPulled }
+  mcpToken: '', // shared secret between Claude and the background server on this computer
 };
 
 export function loadConfig() {
@@ -35,6 +37,15 @@ export function updateConfig(patch) {
   const cfg = { ...loadConfig(), ...patch };
   saveConfig(cfg);
   return cfg;
+}
+
+/** The key Claude Code presents to the background server. Created once per computer. */
+export function ensureMcpToken() {
+  const cfg = loadConfig();
+  if (cfg.mcpToken) return cfg.mcpToken;
+  const token = crypto.randomBytes(32).toString('base64url');
+  updateConfig({ mcpToken: token });
+  return token;
 }
 
 export function isConfigured(cfg = loadConfig()) {

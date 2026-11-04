@@ -10,7 +10,7 @@ import { createMockGraph } from '../test/mock-graph.js';
 const home = path.join(os.tmpdir(), 'm365-bridge-demo');
 fs.rmSync(home, { recursive: true, force: true });
 
-const mock = createMockGraph();
+const mock = createMockGraph({ user: { name: 'Jordan Avery', email: 'jordan.avery@demofirm.com' } });
 const base = await mock.listen();
 Object.assign(process.env, {
   M365_GRAPH_BASE: `${base}/v1.0`,
@@ -27,7 +27,8 @@ Object.assign(process.env, {
 const { updateConfig } = await import('../src/config.js');
 const ws = await import('../src/workspace.js');
 const { audit } = await import('../src/audit.js');
-const { startDashboard, openBrowser } = await import('../src/dashboard/server.js');
+const { startDashboard } = await import('../src/dashboard/server.js');
+const { openBrowser } = await import('../src/browser.js');
 
 updateConfig({
   tenantId: '9f3c2a1e-4b7d-4e2a-9c1f-2d8e6a5b4c3d',
@@ -40,11 +41,17 @@ const matter = `${mock.HOST}/Matters/Henderson v Acme`;
 audit({ tool: 'sign_in', user: 'jordan.avery@demofirm.com' });
 audit({ tool: 'search', query: 'Henderson engagement letter', results: 3 });
 const pulled = await ws.pull({ source: matter });
+await ws.lock({ localPath: pulled.workspace, files: ['Timeline.md'] });
 fs.appendFileSync(path.join(pulled.workspace, 'Timeline.md'), '- 2026-02-01 demand letter sent\n');
-await ws.push({ localPath: pulled.workspace });
+await ws.push({ localPath: pulled.workspace, note: 'Added demand letter date' });
 audit({ tool: 'mail_search', query: 'settlement offer', results: 4 });
 audit({ tool: 'mail_draft', subject: 'Re: Henderson settlement offer' });
+// Claude is mid-edit on the engagement letter (checked out to Jordan).
+await ws.lock({ localPath: pulled.workspace, files: ['Engagement Letter.txt'] });
+fs.appendFileSync(path.join(pulled.workspace, 'Engagement Letter.txt'), ' Retainer: $2,500.');
+// A colleague changed the complaint, and another holds the timeline.
 mock.remoteEdit('Matters/Henderson v Acme/Pleadings/Complaint.txt', 'COMPLAINT draft v2', 'Sarah Chen');
+mock.remoteCheckout('Matters/Henderson v Acme/Timeline.md', 'maria.lopez@demofirm.com');
 
 const url = await startDashboard();
 console.log(`Demo dashboard: ${url}`);

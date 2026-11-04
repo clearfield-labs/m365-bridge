@@ -1,4 +1,22 @@
-# Admin setup: Microsoft Entra (once per firm, about 5 minutes)
+# Admin setup: Microsoft Entra (once per firm)
+
+## Automatic (recommended, about 2 minutes)
+
+1. Install M365 Bridge on your own computer (see the README).
+2. Open `http://localhost:4365/admin` and go to **Set up your firm**. You can also ask Claude: "Set up M365 Bridge for my firm."
+3. Enter the firm name and choose who can use it: **Everyone in the firm**, or **Only these people** with a list of email addresses.
+4. Click **Sign in as admin and set up**, and sign in with a Global Administrator account. (Privileged Role Administrator also works.)
+   The sign-in uses Microsoft's own "Microsoft Graph Command Line Tools" app, which is the same one `Connect-MgGraph` uses.
+   M365 Bridge then:
+   - creates the **Claude M365 Bridge** app registration: single tenant, public client, redirect `http://localhost:4365/auth/callback`, no secret
+   - adds the delegated Microsoft Graph permissions for the chosen permission packs
+   - grants tenant-wide admin consent for exactly those permissions
+   - for **Only these people**, turns on **Assignment required** and assigns you plus the listed people
+5. Copy the **setup code** it shows and send it to the team.
+
+The admin token stays in memory for these calls and is never saved. To add people later, run setup again with more email addresses. Running it again updates the same app and does not create a second one.
+
+## By hand, in the Entra admin center
 
 You need two values from Entra, and neither is a secret:
 
@@ -7,9 +25,7 @@ You need two values from Entra, and neither is a secret:
 | **Directory (tenant) ID** | App registration → Overview |
 | **Application (client) ID** | App registration → Overview |
 
-No client secret and no certificate. Each person signs in as themselves, so nothing on a laptop can reach anyone else's mail or files.
-
-## Steps
+There is no client secret and no certificate. Each person signs in as themselves, so nothing on a laptop can reach anyone else's mail or files.
 
 1. Go to **entra.microsoft.com → Identity → Applications → App registrations → New registration**.
    - Name: `Claude M365 Bridge`
@@ -17,10 +33,10 @@ No client secret and no certificate. Each person signs in as themselves, so noth
    - Redirect URI: platform **Public client/native (mobile & desktop)**, value `http://localhost:4365/auth/callback`
 2. **Authentication** → set **Allow public client flows** to **Yes** → Save. This lets people sign in with a code from inside Claude if the browser redirect is blocked.
 3. Copy the **tenant ID** and **client ID** from **Overview**.
-4. On your own machine, run the installer, open the dashboard (`http://localhost:4365`), and paste the two IDs into **Connect your firm**. Tick the permission packs the firm wants. Save.
-5. Click **Grant admin consent for the firm** in the dashboard. You need to be a Global Administrator (or Privileged Role Administrator). That one click approves every ticked permission for the whole tenant through v2 dynamic consent, so you do not have to add each permission in the portal by hand.
-   - If you prefer the portal: **API permissions → Add a permission → Microsoft Graph → Delegated**, add the scopes the dashboard lists, then **Grant admin consent for <tenant>**.
-6. Copy the **setup code** from the dashboard and send it to your team. It holds the tenant ID, client ID and permission choices. It contains no secret.
+4. Open `http://localhost:4365/admin` → **Set it up by hand instead**, paste the two IDs, and save.
+5. Open **Permissions** and click **Approve for the firm again**. This needs a Global Administrator. One click approves every permission for the whole tenant through v2 dynamic consent.
+   - If you prefer the portal: **API permissions → Add a permission → Microsoft Graph → Delegated**, add the scopes, then **Grant admin consent for <tenant>**.
+6. Copy the **setup code** and send it to your team. It holds the tenant ID, client ID and permission choices, and no secret.
 
 ## Choose who gets it (recommended)
 

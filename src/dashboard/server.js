@@ -1,149 +1,173 @@
-// Local admin dashboard. Binds to 127.0.0.1 only, rejects other Host headers (DNS rebinding)
-// and cross-origin POSTs (CSRF). Never renders tokens.
+// The background service: the setup page for people, and the MCP endpoint for Claude.
+// Listens on this computer only (127.0.0.1 and ::1). Rejects other Host headers (DNS
+// rebinding) and cross-site requests (CSRF). /mcp also needs the key Claude was given.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import { PORT, DASHBOARD_URL, WORKSPACES_ROOT, PACKAGE_ROOT } from '../paths.js';
-import { loadConfig, updateConfig, isConfigured, validateIds, makeSetupCode, parseSetupCode } from '../config.js';
+import { loadConfig, isConfigured } from '../config.js';
 import { currentAccount, startBrowserSignIn, finishBrowserSignIn, signOut } from '../auth.js';
 import { keyStorage } from '../vault.js';
 import { recentAudit, audit } from '../audit.js';
 import { graph } from '../graph.js';
 import * as ws from '../workspace.js';
 import { registrationStatus, registerClaudeCode, registerClaudeDesktop } from '../register.js';
+import { serviceStatus, installService, uninstallService } from '../service.js';
+import { applyFirm, applySetupCode, currentSetupCode } from '../setup.js';
+import * as provision from '../provision.js';
+import { startProvision } from '../provision.js';
+import { openBrowser } from '../browser.js';
 import { renderPage, renderMessage } from './page.js';
-import { PACKS, parseExtraScopes, scopesFor } from '../scopes.js';
+import { PACKS, parseExtraScopes, adminConsentUrl } from '../scopes.js';
 
+export { openBrowser };
+const VERSION = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
 const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
 let flash = null; // one-shot message shown after a redirect
 
-function readBody(req) {
+function readRaw(req) {
   return new Promise((resolve, reject) => {
-    let data = '';
+    const chunks = [];
+    let size = 0;
     req.on('data', (c) => {
-      data += c;
-      if (data.length > 1e6) req.destroy();
+      size += c.length;
+      if (size > 4e6) req.destroy();
+      else chunks.push(c);
     });
-    req.on('end', () => resolve(Object.fromEntries(new URLSearchParams(data))));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
 }
 
-function send(res, status, html, headers = {}) {
-  res.writeHead(status, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-store',
-    'X-Frame-Options': 'DENY',
-    'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.microsoftonline.com",
-    ...headers,
-  });
+const SECURITY_HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self' https://login.microsoftonline.com",
+};
+function send(res, status, html) {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
   res.end(html);
 }
+function sendJson(res, status, data) {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(data));
+}
 const redirect = (res, to) => { res.writeHead(303, { Location: to, 'Cache-Control': 'no-store' }); res.end(); };
-const go = (res, kind, text, anchor = '') => { flash = { kind, text }; redirect(res, `/${anchor}`); };
+const go = (res, kind, text, to = '/') => { flash = { kind, text }; redirect(res, to); };
 
 async function state() {
   const cfg = loadConfig();
   return {
     cfg,
+    version: VERSION,
     configured: isConfigured(cfg),
     account: await currentAccount(),
     keyStorage: keyStorage(),
-    setupCode: isConfigured(cfg) ? makeSetupCode(cfg) : null,
+    setupCode: currentSetupCode(),
+    consentUrl: isConfigured(cfg) ? adminConsentUrl(cfg, `${DASHBOARD_URL}auth/callback`) : null,
     registration: registrationStatus(),
+    service: serviceStatus(),
     workspaces: ws.listWorkspaces(),
+    held: ws.heldFiles(),
     workspacesRoot: WORKSPACES_ROOT,
-    audit: recentAudit(40),
-    port: PORT,
+    audit: recentAudit(12),
+    job: provision.job ? { running: provision.job.running, steps: provision.job.steps, error: provision.job.error, done: !!provision.job.result } : null,
   };
+}
+
+function bearerOk(req) {
+  const token = loadConfig().mcpToken;
+  const got = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1] || '';
+  if (!token || got.length !== token.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(token));
 }
 
 async function handle(req, res) {
   if (!ALLOWED_HOSTS.has(req.headers.host)) return send(res, 403, 'Forbidden host');
   const url = new URL(req.url, DASHBOARD_URL);
+  const origin = req.headers.origin;
+  const foreignOrigin = origin && !ALLOWED_HOSTS.has(origin.replace(/^https?:\/\//, ''));
+
+  // Claude's connection. Browsers never get in: no web page can set the key, and any
+  // cross-site Origin is refused before the key is even checked.
+  if (url.pathname === '/mcp') {
+    if (foreignOrigin) return sendJson(res, 403, { error: 'Forbidden origin' });
+    if (!bearerOk(req)) return sendJson(res, 401, { error: 'Claude is not connected to this computer\'s M365 Bridge. Open the M365 Bridge page and click Connect Claude.' });
+    const raw = req.method === 'POST' ? await readRaw(req) : '';
+    let body;
+    try { body = raw ? JSON.parse(raw) : undefined; } catch { return sendJson(res, 400, { error: 'Bad JSON' }); }
+    const { handleMcpHttp } = await import('../mcp.js');
+    return handleMcpHttp(req, res, body);
+  }
 
   if (req.method === 'POST') {
-    const origin = req.headers.origin;
-    if (origin && !ALLOWED_HOSTS.has(origin.replace(/^https?:\/\//, ''))) return send(res, 403, 'Forbidden origin');
-    const body = await readBody(req);
+    if (foreignOrigin) return send(res, 403, 'Forbidden origin');
+    if (url.pathname === '/api/shutdown') {
+      if (!bearerOk(req)) return sendJson(res, 401, { error: 'no' });
+      sendJson(res, 200, { ok: true });
+      return setTimeout(() => process.exit(0), 100);
+    }
+    const body = Object.fromEntries(new URLSearchParams(await readRaw(req)));
+    const back = body.back === 'admin' ? '/admin' : '/';
     try {
-      return await post(url.pathname, body, res);
+      return await post(url.pathname, body, res, back);
     } catch (e) {
-      return go(res, 'error', e.message);
+      return go(res, 'error', e.message, back);
     }
   }
 
   switch (url.pathname) {
-    case '/': {
+    case '/':
+    case '/admin': {
       const s = await state();
-      const page = renderPage(s, flash);
+      const html = renderPage(s, flash, url.pathname === '/admin' ? 'admin' : 'home');
       flash = null;
-      return send(res, 200, page);
+      return send(res, 200, html);
     }
     case '/healthz':
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ app: 'm365-bridge' }));
+      return sendJson(res, 200, { app: 'm365-bridge', version: VERSION, pid: process.pid });
     case '/auth/start':
-      if (!isConfigured()) return go(res, 'error', 'Enter the firm Tenant ID and Client ID first.');
+      if (!isConfigured()) return go(res, 'error', 'Paste the setup code from your admin first.');
       return redirect(res, await startBrowserSignIn());
     case '/auth/callback': {
       const p = url.searchParams;
       if (p.get('admin_consent') || p.get('state') === 'adminconsent') {
         audit({ tool: 'admin_consent', result: p.get('admin_consent') });
         return (p.get('admin_consent') || '').toLowerCase() === 'true'
-          ? go(res, 'ok', 'Admin consent granted for the whole firm. Each person can now sign in without a permission prompt.', '#admin')
-          : go(res, 'error', `Admin consent was not granted: ${p.get('error_description') || 'cancelled'}`, '#admin');
+          ? go(res, 'ok', 'Approved for the whole firm. Nobody will see a permissions prompt.', '/admin')
+          : go(res, 'error', `Not approved: ${p.get('error_description') || 'cancelled'}`, '/admin');
       }
-      if (p.get('error')) return go(res, 'error', `Microsoft sign-in failed: ${p.get('error_description') || p.get('error')}`, '#overview');
+      if (p.get('error')) return go(res, 'error', `Microsoft sign-in failed: ${p.get('error_description') || p.get('error')}`);
       try {
         const account = await finishBrowserSignIn(p.get('code'), p.get('state'));
         audit({ tool: 'sign_in', user: account?.username });
-        return go(res, 'ok', `Signed in as ${account?.username}. You can go back to Claude.`, '#overview');
+        return go(res, 'ok', `Signed in as ${account?.username}. You can go back to Claude.`);
       } catch (e) {
-        return go(res, 'error', e.message, '#overview');
+        return go(res, 'error', e.message);
       }
     }
     case '/api/workspace-status': {
       const wsPath = url.searchParams.get('path');
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Cache-Control', 'no-store');
-      if (!ws.listWorkspaces().some((w) => w.localPath === wsPath)) {
-        res.writeHead(404);
-        return res.end(JSON.stringify({ error: 'Unknown workspace' }));
-      }
+      if (!ws.listWorkspaces().some((w) => w.localPath === wsPath)) return sendJson(res, 404, { error: 'Unknown folder' });
       try {
-        const st = await ws.status({ localPath: wsPath, checkRemote: !!(await currentAccount()) });
-        res.writeHead(200);
-        return res.end(JSON.stringify({ data: st }));
+        return sendJson(res, 200, { data: await ws.status({ localPath: wsPath, checkRemote: !!(await currentAccount()) }) });
       } catch (e) {
-        res.writeHead(200);
-        return res.end(JSON.stringify({ error: e.message }));
+        return sendJson(res, 200, { error: e.message });
       }
     }
+    case '/api/setup-job': {
+      const j = provision.job;
+      return sendJson(res, 200, { data: j ? { running: j.running, steps: j.steps.map((x) => x.text), error: j.error, done: !!j.result } : null });
+    }
+    case '/assets/app.css':
+    case '/assets/app.js':
+      return sendStatic(res, path.basename(url.pathname));
     default:
-      if (url.pathname.startsWith('/assets/fonts/')) return sendFont(res, path.basename(url.pathname));
-      if (url.pathname === '/assets/app.css' || url.pathname === '/assets/app.js') return sendStatic(res, path.basename(url.pathname));
       return send(res, 404, renderMessage('Not found', 'Nothing here.'));
   }
-}
-
-const FONTS = {
-  'serif.woff2': '@fontsource/instrument-serif/files/instrument-serif-latin-400-normal.woff2',
-  'serif-italic.woff2': '@fontsource/instrument-serif/files/instrument-serif-latin-400-italic.woff2',
-  'sans.woff2': '@fontsource-variable/hanken-grotesk/files/hanken-grotesk-latin-wght-normal.woff2',
-  'mono.woff2': '@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2',
-};
-function sendFont(res, name) {
-  const rel = FONTS[name];
-  const file = rel && path.join(PACKAGE_ROOT, 'node_modules', rel);
-  if (!file || !fs.existsSync(file)) {
-    res.writeHead(404);
-    return res.end();
-  }
-  res.writeHead(200, { 'Content-Type': 'font/woff2', 'Cache-Control': 'public, max-age=31536000, immutable' });
-  fs.createReadStream(file).pipe(res);
 }
 
 const STATIC_TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
@@ -153,71 +177,90 @@ function sendStatic(res, name) {
   fs.createReadStream(file).pipe(res);
 }
 
-async function post(route, body, res) {
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+async function post(route, body, res, back) {
   switch (route) {
+    case '/setup-code': {
+      const cfg = await applySetupCode(body.setupCode);
+      return go(res, 'ok', `Connected to ${cfg.firmName || 'your firm'}. Next, sign in with Microsoft.`);
+    }
     case '/firm': {
-      let patch;
-      if (body.setupCode?.trim()) {
-        try { patch = parseSetupCode(body.setupCode); } catch { throw new Error('That setup code is not valid. Copy it again from your admin.'); }
-      } else {
-        patch = {
-          tenantId: body.tenantId?.trim(),
-          clientId: body.clientId?.trim(),
-          firmName: body.firmName?.trim() || '',
-          allowWrite: body.allowWrite === 'on',
-          allowDelete: body.allowDelete === 'on',
-          packs: Object.keys(PACKS).filter((k) => k !== 'files' && body[`pack_${k}`] === 'on'),
-          extraScopes: parseExtraScopes(body.extraScopes).join(' '),
-        };
-      }
-      const errors = validateIds(patch.tenantId, patch.clientId);
-      if (errors.length) throw new Error(errors.join(' '));
-      const before = loadConfig();
-      const scopesChanged = scopesFor(before).join(' ') !== scopesFor({ ...before, ...patch }).join(' ');
-      if (before.tenantId && (before.tenantId !== patch.tenantId || before.clientId !== patch.clientId || scopesChanged)) await signOut();
-      updateConfig(patch);
-      audit({ tool: 'firm_setup', tenant: patch.tenantId });
-      return go(res, 'ok', 'Saved and encrypted. Next: sign in with your Microsoft account.', '#overview');
+      await applyFirm({ tenantId: body.tenantId?.trim(), clientId: body.clientId?.trim(), firmName: body.firmName?.trim() || loadConfig().firmName });
+      return go(res, 'ok', 'Saved. Share the setup code below with your team.', '/admin');
+    }
+    case '/settings': {
+      const cfg = loadConfig();
+      await applyFirm({
+        tenantId: cfg.tenantId,
+        clientId: cfg.clientId,
+        firmName: body.firmName?.trim() ?? cfg.firmName,
+        allowWrite: body.allowWrite === 'on',
+        allowDelete: body.allowDelete === 'on',
+        packs: Object.keys(PACKS).filter((k) => k !== 'files' && body[`pack_${k}`] === 'on'),
+        extraScopes: parseExtraScopes(body.extraScopes).join(' '),
+      });
+      return go(res, 'ok', 'Settings saved. If you changed permissions, run firm setup again (or approve again) so Microsoft allows them.', '/admin');
+    }
+    case '/admin/auto': {
+      const people = String(body.people || '').split(/[\s,;]+/).filter((x) => x.includes('@'));
+      if (body.access === 'selected' && !people.length) throw new Error('List at least one email address, or choose "Everyone in the firm".');
+      const j = startProvision({ firmName: body.firmName?.trim(), access: body.access === 'selected' ? 'selected' : 'everyone', people, cfg: loadConfig() });
+      j.promise.then((r) => r && applyFirm({ tenantId: r.tenantId, clientId: r.clientId, firmName: r.firmName })).catch(() => {});
+      return redirect(res, '/admin#setup');
     }
     case '/signout':
       await signOut();
       audit({ tool: 'sign_out' });
-      return go(res, 'ok', 'Signed out. Your tokens were deleted from this computer.', '#overview');
+      return go(res, 'ok', 'Signed out. Your sign-in was deleted from this computer.', back);
     case '/test': {
       const me = await graph('/me?$select=displayName,mail,userPrincipalName');
-      const drive = await graph('/me/drive?$select=webUrl,quota');
-      const used = drive.quota?.used ? ` (${(drive.quota.used / 1e9).toFixed(1)} GB used)` : '';
-      return go(res, 'ok', `Connected as ${me.displayName} (${me.mail || me.userPrincipalName}). OneDrive reachable${used}.`, '#overview');
+      await graph('/me/drive?$select=id');
+      return go(res, 'ok', `Working. Connected to Microsoft 365 as ${me.displayName} (${me.mail || me.userPrincipalName}).`, back);
     }
-    case '/register': {
+    case '/connect': {
       const msgs = [];
-      if (body.target === 'code' || body.target === 'both') msgs.push(registerClaudeCode());
-      if (body.target === 'desktop' || body.target === 'both') msgs.push(registerClaudeDesktop());
-      audit({ tool: 'register', target: body.target });
-      return go(res, 'ok', msgs.join(' '), '#overview');
+      if (!serviceStatus().installed) msgs.push(installService());
+      msgs.push(registerClaudeCode());
+      if (registrationStatus().desktopInstalled) msgs.push(registerClaudeDesktop());
+      audit({ tool: 'connect_claude' });
+      return go(res, 'ok', msgs.join(' '));
     }
+    case '/service/on':
+      return go(res, 'ok', installService(), back);
+    case '/service/off':
+      return go(res, 'ok', `${uninstallService()} Claude can reach M365 Bridge only while this page is running.`, back);
     case '/workspace/add': {
       const r = await ws.pull({ source: body.source?.trim(), name: body.name?.trim() || undefined });
-      return go(res, r.conflicts.length ? 'warn' : 'ok', `Pulled ${r.downloaded.length} files into ${r.workspace}.${r.skipped.length ? ` Skipped ${r.skipped.length}.` : ''} Open that folder in Claude Code.`, '#matters');
+      return go(res, 'ok', `Copied ${plural(r.downloaded.length, 'file')} to ${r.workspace}.${r.skipped.length ? ` Skipped ${r.skipped.length}.` : ''}`);
     }
     case '/workspace/pull': {
       const r = await ws.pull({ localPath: body.localPath });
       const n = r.downloaded.length + r.updated.length;
-      return go(res, r.conflicts.length ? 'warn' : 'ok', `${n} file${n === 1 ? '' : 's'} updated.${r.conflicts.length ? ` ${r.conflicts.length} conflict(s): SharePoint copies saved next to your files.` : ''}`, '#matters');
+      return go(res, r.needs_merge.length ? 'warn' : 'ok', `${plural(n, 'file')} updated.${r.needs_merge.length ? ` ${plural(r.needs_merge.length, 'file')} changed on both sides; ask Claude to merge.` : ''}`);
+    }
+    case '/workspace/push': {
+      const r = await ws.push({ localPath: body.localPath, files: body.file ? [body.file] : undefined, note: body.note || 'Updated from the M365 Bridge page' });
+      const n = r.uploaded.length + r.created.length;
+      const issues = [
+        r.held_by_others.length && `${plural(r.held_by_others.length, 'file')} checked out to a colleague`,
+        r.needs_merge.length && `${plural(r.needs_merge.length, 'file')} need a merge (ask Claude)`,
+        r.errors.length && `${r.errors[0].file}: ${r.errors[0].error}`,
+      ].filter(Boolean);
+      if (issues.length) return go(res, 'warn', `${n} sent to SharePoint. ${issues.join('. ')}.`);
+      return go(res, 'ok', n ? `Sent ${plural(n, 'file')} to SharePoint and checked in.` : r.released.length ? `Released ${plural(r.released.length, 'file')}.` : 'Nothing to send. Everything matches SharePoint.');
+    }
+    case '/release': {
+      const r = await ws.release({ localPath: body.localPath, files: body.file ? [body.file] : undefined });
+      return go(res, 'ok', `Released ${plural(r.released.length, 'file')}. Colleagues can edit ${r.released.length === 1 ? 'it' : 'them'} again.${r.edits_kept_locally.length ? ' Your unsent edits are still on this computer.' : ''}`);
     }
     case '/workspace/open':
-      openPath(body.localPath);
-      return go(res, 'ok', `Opened ${body.localPath}`, '#matters');
+      if (!ws.listWorkspaces().some((w) => w.localPath === body.localPath)) throw new Error('Unknown folder.');
+      openBrowser(body.localPath);
+      return go(res, 'ok', `Opened ${path.basename(body.localPath)}.`);
     case '/workspace/forget':
       ws.forgetWorkspace(body.localPath);
-      return go(res, 'ok', 'Removed from the list. The local folder and SharePoint were not touched.', '#matters');
-    case '/workspace/push': {
-      const r = await ws.push({ localPath: body.localPath });
-      const n = r.uploaded.length + r.created.length;
-      if (r.conflicts.length) return go(res, 'warn', `${n} uploaded. ${r.conflicts.length} not uploaded because a colleague changed them in SharePoint. Pull latest, merge, then upload again.`, '#matters');
-      if (r.errors.length) return go(res, 'error', `${n} uploaded. ${r.errors[0].file}: ${r.errors[0].error}`, '#matters');
-      return go(res, 'ok', n ? `Uploaded ${n} file${n === 1 ? '' : 's'} to SharePoint as new versions.` : 'Nothing to upload. Everything matches SharePoint.', '#matters');
-    }
+      return go(res, 'ok', 'Removed from the list. The folder on this computer and SharePoint were not touched.');
     default:
       return send(res, 404, renderMessage('Not found', 'Nothing here.'));
   }
@@ -227,42 +270,44 @@ export function escape(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-export function openBrowser(url) {
-  const [cmd, args] =
-    process.platform === 'darwin' ? ['open', [url]]
-    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
-    : ['xdg-open', [url]];
-  try { spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true }).unref(); } catch { /* headless */ }
-}
-const openPath = openBrowser;
-
 let server = null;
 
-/** Start the dashboard in this process unless one is already answering on the port. */
+/** Make sure the page is up: reuse the background service, or start it in this process. */
 export async function ensureDashboard() {
   if (server) return DASHBOARD_URL;
-  try {
-    const r = await fetch(`${DASHBOARD_URL}healthz`, { signal: AbortSignal.timeout(800) });
-    if (r.ok && (await r.json()).app === 'm365-bridge') return DASHBOARD_URL;
-  } catch { /* not running */ }
+  if (await isRunning()) return DASHBOARD_URL;
   return startDashboard();
+}
+
+export async function isRunning() {
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/healthz`, { signal: AbortSignal.timeout(800) });
+    const j = r.ok ? await r.json() : null;
+    return j?.app === 'm365-bridge' ? j : null;
+  } catch {
+    return null;
+  }
 }
 
 export function startDashboard() {
   return new Promise((resolve, reject) => {
-    server = http.createServer((req, res) => {
-      handle(req, res).catch((e) => send(res, 500, renderMessage('Something went wrong', escape(e.message))));
-    });
+    const onRequest = (req, res) => {
+      handle(req, res).catch((e) => {
+        if (!res.headersSent) send(res, 500, renderMessage('Something went wrong', escape(e.message)));
+      });
+    };
+    server = http.createServer(onRequest);
     server.on('error', (e) => {
       server = null;
-      reject(e.code === 'EADDRINUSE' ? new Error(`Port ${PORT} is busy. Set M365_BRIDGE_PORT to another port (and add that redirect URI in Entra).`) : e);
+      reject(e.code === 'EADDRINUSE' ? Object.assign(new Error(`Port ${PORT} is busy.`), { code: 'EADDRINUSE' }) : e);
     });
     server.listen(PORT, '127.0.0.1', () => {
       // "localhost" can resolve to IPv6 first; answer there too so the Microsoft redirect always lands.
-      const v6 = http.createServer(server.listeners('request')[0]);
+      const v6 = http.createServer(onRequest);
       v6.on('error', () => {});
       v6.listen(PORT, '::1');
       resolve(DASHBOARD_URL);
     });
   });
 }
+

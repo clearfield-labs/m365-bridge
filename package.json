@@ -1,6 +1,6 @@
 {
   "name": "m365-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Use SharePoint and OneDrive folders as the source of truth for Claude Code, the way developers use GitHub.",
   "type": "module",
   "bin": {
@@ -18,9 +18,6 @@
   "license": "MIT",
   "dependencies": {
     "@azure/msal-node": "^7.1.2",
-    "@fontsource-variable/hanken-grotesk": "^5.3.0",
-    "@fontsource/ibm-plex-mono": "^5.3.0",
-    "@fontsource/instrument-serif": "^5.3.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "mammoth": "^1.13.0",
     "unpdf": "^1.9.1",

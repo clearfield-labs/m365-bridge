@@ -1,8 +1,21 @@
 // A small in-memory Microsoft Graph for tests: one SharePoint library with folders,
-// files, eTags, versions, upload sessions, sharing links, search, and a mailbox.
+// files, eTags, versions, check-out/check-in, moves, upload sessions, sharing links,
+// search, a mailbox, and the Entra calls that firm setup makes.
 import http from 'node:http';
+import crypto from 'node:crypto';
+import { PACKS } from '../src/scopes.js';
 
-export function createMockGraph({ token = 'test-token' } = {}) {
+export function createMockGraph({ token = 'test-token', user = { name: 'Test User', email: 'test@example.com' } } = {}) {
+  const USERS = {
+    [token]: { id: 'U-test', displayName: user.name, userPrincipalName: user.email, mail: user.email },
+    'admin-token': { id: 'U-admin', displayName: 'Firm Admin', userPrincipalName: 'admin@mockfirm.com', mail: 'admin@mockfirm.com' },
+  };
+  const directory = [...Object.values(USERS), { id: 'U-maria', displayName: 'Maria Lopez', userPrincipalName: 'maria@mockfirm.com' }];
+  const entra = { apps: [], sps: [], grants: [], assignments: [] };
+  const GRAPH_APP = '00000003-0000-0000-c000-000000000000';
+  const scopeNames = new Set(['User.Read']);
+  for (const p of Object.values(PACKS)) for (const x of [...p.read, ...p.write]) scopeNames.add(x);
+  const graphSp = { id: 'SP-graph', appId: GRAPH_APP, oauth2PermissionScopes: [...scopeNames].map((v) => ({ id: `scope-${v}`, value: v })) };
   const DRIVE = 'b!mockdrive';
   const HOST = 'https://mock.sharepoint.com/sites/Lit/Shared Documents';
   const items = new Map();
@@ -13,7 +26,7 @@ export function createMockGraph({ token = 'test-token' } = {}) {
   const now = () => new Date().toISOString();
   function add(parentId, name, content, by = 'Seed') {
     const id = `I${++seq}`;
-    const it = { id, name, parentId, ver: 1, modified: now(), by };
+    const it = { id, name, parentId, ver: 1, meta: 0, modified: now(), by, checkout: null };
     if (content === null) it.folder = true;
     else { it.content = Buffer.from(content); it.versions = [{ id: '1.0', content: it.content, modified: it.modified, by }]; }
     items.set(id, it);
@@ -27,16 +40,19 @@ export function createMockGraph({ token = 'test-token' } = {}) {
     id: it.id,
     name: it.name,
     size: it.content ? it.content.length : 0,
-    eTag: `"{${it.id}},${it.ver}"`,
+    eTag: `"{${it.id}},${it.ver}.${it.meta || 0}"`,
     cTag: `"c:{${it.id}},${it.ver}"`,
     webUrl: `${HOST}/${pathOf(it)}`.replace(/\/$/, ''),
     lastModifiedDateTime: it.modified,
     lastModifiedBy: { user: { displayName: it.by } },
     parentReference: { driveId: DRIVE, id: it.parentId || undefined },
-    ...(it.folder ? { folder: { childCount: children(it.id).length } } : { file: { mimeType: 'application/octet-stream' } }),
+    publication: { level: it.checkout ? 'checkout' : 'published' },
+    ...(it.folder
+      ? { folder: { childCount: children(it.id).length } }
+      : { file: { mimeType: 'application/octet-stream', hashes: { quickXorHash: crypto.createHash('sha1').update(it.content).digest('base64') } } }),
     ...(it.id === 'root' ? { root: {} } : {}),
   });
-  function update(it, buf, by = 'Test User') {
+  function update(it, buf, by = user.name) {
     it.ver++;
     it.content = buf;
     it.modified = now();
@@ -78,6 +94,7 @@ export function createMockGraph({ token = 'test-token' } = {}) {
   const err = (res, status, code, message) => send(res, status, { error: { code, message } });
 
   const server = http.createServer(async (req, res) => {
+    let mm0;
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const raw = Buffer.concat(chunks);
@@ -94,10 +111,61 @@ export function createMockGraph({ token = 'test-token' } = {}) {
       const it = s.finish(s.buf);
       return send(res, 201, json(it));
     }
-    if (req.headers.authorization !== `Bearer ${token}`) return err(res, 401, 'InvalidAuthenticationToken', 'bad token');
+    const caller = USERS[(req.headers.authorization || '').replace(/^Bearer /, '')];
+    if (!caller) return err(res, 401, 'InvalidAuthenticationToken', 'bad token');
     const m = p.replace(/^\/(v1\.0|beta)/, '');
+    const q = url.searchParams;
+    const filterValue = () => /eq '([^']+)'/.exec(q.get('$filter') || '')?.[1];
 
-    if (m === '/me') return send(res, 200, { displayName: 'Test User', mail: 'test@example.com', userPrincipalName: 'test@example.com' });
+    if (m === '/me') return send(res, 200, caller);
+
+    // --- Entra (firm setup) ---
+    if (m === '/organization') return send(res, 200, { value: [{ id: 'aaaaaaaa-1111-2222-3333-444444444444', displayName: 'Mock Firm LLP' }] });
+    if (m === '/servicePrincipals' && req.method === 'GET') {
+      const appId = filterValue();
+      if (appId === GRAPH_APP) return send(res, 200, { value: [graphSp] });
+      return send(res, 200, { value: entra.sps.filter((x) => x.appId === appId) });
+    }
+    if (m === '/servicePrincipals' && req.method === 'POST') {
+      const b = JSON.parse(raw);
+      const sp = { id: `SP-${entra.sps.length + 1}`, ...b };
+      entra.sps.push(sp);
+      return send(res, 201, sp);
+    }
+    if ((mm0 = /^\/servicePrincipals\/([^/]+)$/.exec(m)) && req.method === 'PATCH') {
+      Object.assign(entra.sps.find((x) => x.id === mm0[1]), JSON.parse(raw));
+      return send(res, 204);
+    }
+    if ((mm0 = /^\/servicePrincipals\/([^/]+)\/appRoleAssignedTo$/.exec(m))) {
+      const b = JSON.parse(raw);
+      if (entra.assignments.some((a) => a.principalId === b.principalId && a.resourceId === b.resourceId)) return err(res, 400, 'Request_BadRequest', 'Permission being assigned already exists on the object');
+      entra.assignments.push(b);
+      return send(res, 201, b);
+    }
+    if (m === '/applications' && req.method === 'GET') return send(res, 200, { value: entra.apps.filter((a) => a.displayName === filterValue()) });
+    if (m === '/applications' && req.method === 'POST') {
+      const app = { id: `APP-${entra.apps.length + 1}`, appId: 'bbbbbbbb-1111-2222-3333-444444444444', ...JSON.parse(raw) };
+      entra.apps.push(app);
+      return send(res, 201, app);
+    }
+    if ((mm0 = /^\/applications\/([^/]+)$/.exec(m)) && req.method === 'PATCH') {
+      Object.assign(entra.apps.find((a) => a.id === mm0[1]), JSON.parse(raw));
+      return send(res, 204);
+    }
+    if (m === '/oauth2PermissionGrants' && req.method === 'GET') return send(res, 200, { value: entra.grants.filter((g) => g.clientId === filterValue()) });
+    if (m === '/oauth2PermissionGrants' && req.method === 'POST') {
+      const g = { id: `G-${entra.grants.length + 1}`, ...JSON.parse(raw) };
+      entra.grants.push(g);
+      return send(res, 201, g);
+    }
+    if ((mm0 = /^\/oauth2PermissionGrants\/([^/]+)$/.exec(m)) && req.method === 'PATCH') {
+      Object.assign(entra.grants.find((g) => g.id === mm0[1]), JSON.parse(raw));
+      return send(res, 204);
+    }
+    if ((mm0 = /^\/users\/([^/]+)$/.exec(m))) {
+      const u = directory.find((x) => x.userPrincipalName === decodeURIComponent(mm0[1]).toLowerCase());
+      return u ? send(res, 200, u) : err(res, 404, 'Request_ResourceNotFound', 'no user');
+    }
     if (m === '/me/drive') return send(res, 200, { id: DRIVE, name: 'Documents', webUrl: HOST, quota: { used: 1e9 } });
     if (m === '/me/followedSites') return send(res, 200, { value: [{ id: 'site1', displayName: 'Litigation', webUrl: 'https://mock.sharepoint.com/sites/Lit' }] });
     if (m === '/me/chats') return send(res, 200, { value: [{ id: 'chat1', topic: 'Henderson team' }] });
@@ -156,7 +224,43 @@ export function createMockGraph({ token = 'test-token' } = {}) {
     }
     const ifMatch = req.headers['if-match'];
     const etagOk = !ifMatch || ifMatch === json(it).eTag || ifMatch === json(it).cTag;
+    const me = caller.userPrincipalName;
+    const lockedOut = () => it.checkout && it.checkout !== me;
+    const locked = () => err(res, 423, 'resourceLocked', `The file "${it.name}" is checked out for editing by i:0#.f|membership|${it.checkout}.`);
     if (rest === '' && req.method === 'GET') return send(res, 200, json(it));
+    if (rest === '' && req.method === 'PATCH') {
+      if (lockedOut()) return locked();
+      const b = JSON.parse(raw);
+      const parentId = b.parentReference?.id || it.parentId;
+      const name = b.name || it.name;
+      const clash = childByName(parentId, name);
+      if (clash && clash !== it) return err(res, 409, 'nameAlreadyExists', 'An item with that name already exists.');
+      it.parentId = parentId;
+      it.name = name;
+      it.meta = (it.meta || 0) + 1;
+      return send(res, 200, json(it));
+    }
+    if (rest === '/checkout' && req.method === 'POST') {
+      if (lockedOut()) return locked();
+      it.checkout = me;
+      it.meta = (it.meta || 0) + 1; // check-out changes the eTag, not the content
+      return send(res, 204);
+    }
+    if (rest === '/checkin' && req.method === 'POST') {
+      if (!it.checkout) return err(res, 400, 'invalidRequest', 'The file is not checked out.');
+      if (lockedOut()) return locked();
+      it.checkout = null;
+      it.meta++;
+      if (it.versions?.[0]) it.versions[0].comment = JSON.parse(raw || '{}').comment;
+      return send(res, 204);
+    }
+    if (rest === '/discardCheckout' && req.method === 'POST') {
+      if (!it.checkout) return err(res, 400, 'invalidRequest', 'The file is not checked out.');
+      if (lockedOut()) return locked();
+      it.checkout = null;
+      it.meta++;
+      return send(res, 204);
+    }
     if (rest === '/children' && req.method === 'GET') return send(res, 200, { value: children(id).map(json) });
     if (rest === '/children' && req.method === 'POST') {
       const body = JSON.parse(raw);
@@ -165,17 +269,19 @@ export function createMockGraph({ token = 'test-token' } = {}) {
     }
     if (rest === '/content' && req.method === 'GET') return send(res, 200, it.content);
     if (rest === '/content' && req.method === 'PUT') {
+      if (lockedOut()) return locked();
       if (!etagOk) return err(res, 412, 'resourceModified', 'ETag mismatch');
       update(it, raw);
       return send(res, 200, json(it));
     }
     if (rest === '/createUploadSession') {
+      if (lockedOut()) return locked();
       if (!etagOk) return err(res, 412, 'resourceModified', 'ETag mismatch');
       const sid = `S${sessions.size + 1}`;
       sessions.set(sid, { buf: Buffer.alloc(0), received: 0, finish: (buf) => { update(it, buf); return it; } });
       return send(res, 200, { uploadUrl: `${base}/upload/${sid}` });
     }
-    if (rest === '/versions') return send(res, 200, { value: it.versions.map((v) => ({ id: v.id, lastModifiedDateTime: v.modified, lastModifiedBy: { user: { displayName: v.by } }, size: v.content.length })) });
+    if (rest === '/versions') return send(res, 200, { value: it.versions.map((v) => ({ id: v.id, lastModifiedDateTime: v.modified, lastModifiedBy: { user: { displayName: v.by } }, size: v.content.length, comment: v.comment })) });
     if ((mm = /^\/versions\/([^/]+)\/restoreVersion$/.exec(rest))) {
       const v = it.versions.find((x) => x.id === mm[1]);
       if (!v) return err(res, 404, 'itemNotFound', 'no version');
@@ -203,8 +309,19 @@ export function createMockGraph({ token = 'test-token' } = {}) {
     drafts,
     log,
     find: (relPath) => walk('root', relPath.split('/')),
+    entra,
     remoteEdit(relPath, text, by = 'Colleague') {
       update(walk('root', relPath.split('/')), Buffer.from(text), by);
+    },
+    remoteCheckout(relPath, email) {
+      const it = walk('root', relPath.split('/'));
+      it.checkout = email;
+      it.meta++;
+    },
+    remoteCheckin(relPath) {
+      const it = walk('root', relPath.split('/'));
+      it.checkout = null;
+      it.meta++;
     },
     listen: () =>
       new Promise((resolve) =>

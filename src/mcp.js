@@ -3,15 +3,26 @@ import path from 'node:path';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { loadConfig, isConfigured } from './config.js';
 import { currentAccount, startDeviceCodeSignIn, deviceCodeState, NotSignedInError, grantedScopes } from './auth.js';
 import { hasPack } from './scopes.js';
-import { GRAPH, graph, graphAll, resolveItem, listChildren, downloadItem, uploadBytes, createFolder, summarize, refOf, personOf } from './graph.js';
+import { GRAPH, graph, graphAll, resolveItem, listChildren, downloadItem, uploadBytes, createFolder, moveItem, summarize, refOf, personOf } from './graph.js';
 import { extractText } from './extract.js';
 import * as ws from './workspace.js';
 import { audit } from './audit.js';
 import { DASHBOARD_URL } from './paths.js';
-import { ensureDashboard, openBrowser } from './dashboard/server.js';
+import { openBrowser } from './browser.js';
+import { applySetupCode, applyFirm, currentSetupCode } from './setup.js';
+import { startProvision } from './provision.js';
+import { serviceStatus } from './service.js';
+import { registrationStatus } from './register.js';
+
+// The dashboard lives in the background service. Start it here only if it is not running.
+async function ensureDashboard() {
+  const { ensureDashboard: ensure } = await import('./dashboard/server.js');
+  return ensure();
+}
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -33,46 +44,93 @@ function tool(server, name, description, shape, handler, { write = false } = {})
 
 const location = z.string().describe('A SharePoint/OneDrive link, a "ref" returned by another tool, or a path in your own OneDrive such as "/Documents/Clients".');
 
-export async function startMcp() {
-  const server = new McpServer(
-    { name: 'm365', version: VERSION },
-    {
-      instructions:
-        'Microsoft 365 files for this firm. SharePoint and OneDrive are the source of truth. ' +
-        'For work on a matter folder, use workspace_pull to make a local working copy, edit files there, then workspace_status and workspace_push (like git pull/status/push). ' +
-        'For quick lookups use search, list_folder and read_file. Always show the person what will upload before calling workspace_push or upload. ' +
-        'If a tool says you are not signed in, call sign_in.',
-    },
-  );
+const INSTRUCTIONS = `Microsoft 365 for this firm, signed in as the person using Claude. SharePoint and OneDrive are the source of truth.
 
-  tool(server, 'status', 'Show who is signed in to Microsoft 365, the firm setup, and the local workspaces.', {}, async () => {
+Setup: if a tool says M365 is not set up, ask the person for the setup code from their admin and call setup. If they are the admin and there is no code yet, call firm_setup. If not signed in, call sign_in.
+
+Matter folders work like git:
+- workspace_pull copies a SharePoint or OneDrive folder to ~/M365 Workspaces (or refreshes it).
+- Before changing an existing file, workspace_lock checks it out in SharePoint so nobody else can save it. Edits through Edit/Write lock automatically; scripts that edit .docx files need the call. If a colleague holds the file, do not edit it; say who has it.
+- workspace_push uploads edits and checks them in with a short note (shown in SharePoint version history). Show the person what will upload first.
+- If a file needs a merge, call workspace_merge and combine both versions into the one file. Never leave a second copy.
+- workspace_move renames or moves files and folders in SharePoint and locally together. Use it to organise.
+- workspace_release hands back files you locked but did not change.
+
+For quick lookups without a local copy use search, list_folder and read_file.`;
+
+export function createServer() {
+  const server = new McpServer({ name: 'm365', version: VERSION }, { instructions: INSTRUCTIONS });
+
+  tool(server, 'status', 'Check M365 Bridge: firm setup, who is signed in, whether it runs in the background, files checked out to you, and synced folders. Call this first if anything seems off.', {}, async () => {
     const cfg = loadConfig();
     const account = await currentAccount();
+    const configured = isConfigured(cfg);
+    const held = ws.heldFiles();
     return {
-      configured: isConfigured(cfg),
+      configured,
       firm: cfg.firmName || undefined,
       signed_in_as: account ? `${account.name || ''} <${account.username}>`.trim() : null,
       can_write: cfg.allowWrite,
-      can_delete: cfg.allowDelete,
-      permission_packs: ['files', ...cfg.packs.filter((p) => p !== 'files')],
-      token_scopes: account ? await grantedScopes() : undefined,
-      workspaces: ws.listWorkspaces().map((w) => ({ name: w.name, local_path: w.localPath, sharepoint: w.webUrl, last_pulled: w.lastPulled })),
+      background_service: serviceStatus(),
+      claude: registrationStatus(),
+      checked_out_to_you: held.map((h) => ({ folder: h.localPath, file: h.file, since: h.since, edited: h.edited, needs_merge: h.needsMerge || undefined })),
+      synced_folders: ws.listWorkspaces().map((w) => ({ name: w.name, local_path: w.localPath, sharepoint: w.webUrl, last_pulled: w.lastPulled })),
+      permissions: account ? await grantedScopes() : undefined,
       dashboard: DASHBOARD_URL,
-      next: !isConfigured(cfg) ? 'Open the dashboard to enter the firm Tenant ID and Client ID.' : !account ? 'Call sign_in.' : undefined,
+      next: !configured
+        ? 'Ask the person for the setup code from their admin and call setup. If they are the Microsoft 365 admin and have no code, call firm_setup.'
+        : !account ? 'Call sign_in.' : held.length ? 'Some files are checked out to this person. Push or release them when done.' : undefined,
     };
   });
 
   tool(
     server,
+    'setup',
+    'Connect this computer to the firm using the setup code the admin shared (starts with M365B-). Saved encrypted on this computer.',
+    { setup_code: z.string() },
+    async ({ setup_code }) => {
+      const cfg = await applySetupCode(setup_code);
+      return `Connected to ${cfg.firmName || 'the firm'}. Next: call sign_in so the person can sign in with their Microsoft account.`;
+    },
+  );
+
+  tool(
+    server,
+    'firm_setup',
+    'For the firm\'s Microsoft 365 admin, once per firm: creates the Entra app and approves it for the firm. Opens a Microsoft sign-in in the browser; the admin must sign in with an admin account. Returns the setup code to share with the team. Call again with no arguments to check progress.',
+    {
+      firm_name: z.string().optional(),
+      access: z.enum(['everyone', 'selected']).optional().describe('everyone (default): anyone in the firm can sign in. selected: only the people listed (plus the admin).'),
+      people: z.array(z.string()).optional().describe('Email addresses to give access when access is "selected".'),
+    },
+    async ({ firm_name, access = 'everyone', people = [] }) => {
+      const { job } = await import('./provision.js');
+      let j = job?.running ? job : null;
+      if (!j) {
+        if (job?.result && !firm_name && !people.length) return finished(job.result);
+        j = startProvision({ firmName: firm_name, access, people, cfg: loadConfig() });
+      }
+      const deadline = Date.now() + 120000;
+      while (j.running && Date.now() < deadline) await new Promise((r) => setTimeout(r, 500));
+      if (j.running) return { status: 'Waiting for the admin to finish signing in to Microsoft in the browser. Call firm_setup again to check.', progress: j.steps.map((x) => x.text) };
+      if (j.error) throw new Error(`Firm setup failed: ${j.error}`);
+      return finished(j.result);
+      async function finished(r) {
+        await applyFirm({ tenantId: r.tenantId, clientId: r.clientId, firmName: r.firmName });
+        return { done: true, setup_code: currentSetupCode(), share: 'Send this setup code to the team. Each person installs M365 Bridge, pastes the code, and signs in.', ...r, next: 'Call sign_in so the admin can sign in as themselves.' };
+      }
+    },
+  );
+
+  tool(
+    server,
     'sign_in',
-    'Sign in to Microsoft 365. Default opens the local dashboard in the browser. method "device_code" returns a code to enter at microsoft.com/devicelogin instead.',
+    'Sign in to Microsoft 365. Default opens the sign-in page in the browser. method "device_code" returns a code to enter at microsoft.com/devicelogin instead.',
     { method: z.enum(['browser', 'device_code']).optional() },
     async ({ method = 'browser' }) => {
       const cfg = loadConfig();
       if (!isConfigured(cfg)) {
-        await ensureDashboard();
-        openBrowser(DASHBOARD_URL);
-        return `M365 Bridge is not set up yet. I opened ${DASHBOARD_URL}. Enter the firm Tenant ID and Client ID (or a setup code from your admin), then sign in.`;
+        return 'M365 Bridge is not connected to a firm yet. Ask the person for the setup code from their admin and call setup (or firm_setup if they are the admin).';
       }
       if (method === 'device_code') {
         const state = deviceCodeState();
@@ -82,11 +140,11 @@ export async function startMcp() {
       }
       await ensureDashboard();
       openBrowser(`${DASHBOARD_URL}auth/start`);
-      return `I opened the Microsoft sign-in page in your browser (${DASHBOARD_URL}auth/start). Finish signing in there, then call status to confirm.`;
+      return 'I opened the Microsoft sign-in page in the browser. Finish signing in there, then call status to confirm.';
     },
   );
 
-  tool(server, 'open_dashboard', 'Open the M365 Bridge dashboard (setup, sign-in, workspaces, activity log) in the browser.', {}, async () => {
+  tool(server, 'open_dashboard', 'Open the M365 Bridge page in the browser (setup, sign-in, files checked out to you, synced folders).', {}, async () => {
     await ensureDashboard();
     openBrowser(DASHBOARD_URL);
     return `Opened ${DASHBOARD_URL}`;
@@ -220,6 +278,27 @@ export async function startMcp() {
 
   tool(
     server,
+    'move',
+    'Move and/or rename a file or folder in SharePoint or OneDrive (within the same library). For files inside a synced folder, use workspace_move instead.',
+    { location, to_folder: location.optional().describe('Destination folder in the same library.'), new_name: z.string().optional() },
+    async ({ location: loc, to_folder, new_name }) => {
+      if (!to_folder && !new_name) throw new Error('Give to_folder, new_name, or both.');
+      const item = await resolveItem(loc);
+      let parentId;
+      if (to_folder) {
+        const dest = await resolveFolderOrRoot(to_folder);
+        if ((dest.parentReference?.driveId || dest.driveId) !== item.parentReference.driveId) throw new Error('That folder is in a different library. Download and upload instead.');
+        parentId = dest.id;
+      }
+      const moved = await moveItem(item.parentReference.driveId, item.id, { parentId, name: new_name });
+      audit({ tool: 'move', target: moved.webUrl });
+      return { moved: item.name, now: moved.name, url: moved.webUrl, ref: refOf(moved) };
+    },
+    { write: true },
+  );
+
+  tool(
+    server,
     'versions',
     'Show the version history of a file: who saved each version and when. Accepts a link, a ref, or a local file inside a workspace.',
     { location },
@@ -251,11 +330,11 @@ export async function startMcp() {
   tool(
     server,
     'workspace_pull',
-    'Make or refresh a local working copy of a SharePoint/OneDrive folder (like git clone / git pull). New: pass source (a folder link). Existing: pass local_path. Never overwrites your local edits; if both sides changed, SharePoint\'s version is saved next to yours as "(SharePoint copy ...)".',
+    'Make or refresh a local copy of a SharePoint or OneDrive folder (like git clone / git pull). New: pass source (a folder link, or an OneDrive path like "/Documents/Clients/Smith"). Existing: pass local_path. Never overwrites your edits; if both sides changed a file, it reports needs_merge.',
     {
-      source: z.string().optional().describe('SharePoint/OneDrive folder link or ref. Needed only for a new workspace.'),
-      local_path: z.string().optional().describe('Workspace folder. Defaults to ~/M365 Workspaces/<folder name>.'),
-      name: z.string().optional().describe('Local folder name for a new workspace.'),
+      source: z.string().optional().describe('SharePoint/OneDrive folder link, ref, or OneDrive path. Needed only the first time.'),
+      local_path: z.string().optional().describe('The local folder. Defaults to ~/M365 Workspaces/<folder name>.'),
+      name: z.string().optional().describe('Local folder name for a new copy.'),
     },
     async ({ source, local_path, name }) => ws.pull({ source, localPath: local_path, name }),
   );
@@ -263,34 +342,83 @@ export async function startMcp() {
   tool(
     server,
     'workspace_status',
-    'Show what changed in a workspace since the last pull: edited here, new here, changed in SharePoint by others (like git status).',
+    'What changed since the last pull: edited here, new here, checked out to you, needing a merge, changed or checked out by colleagues in SharePoint (like git status).',
     { local_path: z.string() },
     async ({ local_path }) => ws.status({ localPath: local_path }),
   );
 
   tool(
     server,
-    'workspace_push',
-    'Upload edits from a workspace to SharePoint (like git push). Each upload becomes a new SharePoint version. If someone else changed a file since your pull, that file is not uploaded and comes back as a conflict. Never deletes anything in SharePoint.',
-    {
-      local_path: z.string(),
-      files: z.array(z.string()).optional().describe('Only push these files (paths relative to the workspace).'),
-      force: z.array(z.string()).optional().describe('Replace these files even if they changed in SharePoint. Their version stays in history. Only with the person\'s explicit OK.'),
-    },
-    async ({ local_path, files, force }) => ws.push({ localPath: local_path, files, force }),
+    'workspace_lock',
+    'Check files out in SharePoint before editing them, so nobody else can save them meanwhile. Reports files a colleague holds (do not edit those), files refreshed with a newer version first (re-read them), and files that need a merge.',
+    { local_path: z.string(), files: z.array(z.string()).describe('Paths relative to the folder.') },
+    async ({ local_path, files }) => ws.lock({ localPath: local_path, files }),
     { write: true },
   );
 
-  tool(server, 'workspace_list', 'List the local workspaces on this computer and the SharePoint folders they mirror.', {}, async () =>
-    ws.listWorkspaces().map((w) => ({ name: w.name, local_path: w.localPath, sharepoint: w.webUrl, last_pulled: w.lastPulled, present: w.exists })),
+  tool(
+    server,
+    'workspace_push',
+    'Upload edits to SharePoint and check them in with a note (like git commit + push). Each file becomes one new version; the note shows in version history. Files locked but unchanged are released. Never deletes anything in SharePoint.',
+    {
+      local_path: z.string(),
+      note: z.string().optional().describe('What changed, in a few words. Shown in SharePoint version history.'),
+      files: z.array(z.string()).optional().describe('Only push these files (relative paths).'),
+      merged: z.array(z.string()).optional().describe('Files you merged with workspace_merge and the person approved.'),
+    },
+    async ({ local_path, note, files, merged }) => ws.push({ localPath: local_path, note, files, merged }),
+    { write: true },
   );
+
+  tool(
+    server,
+    'workspace_merge',
+    'When a file changed both here and in SharePoint: returns paths to yours (the file in the folder), theirs (SharePoint\'s newer version, kept out of sight) and base (what both started from). Merge into yours, then push with merged.',
+    { local_path: z.string(), file: z.string() },
+    async ({ local_path, file }) => ws.merge({ localPath: local_path, file }),
+    { write: true },
+  );
+
+  tool(
+    server,
+    'workspace_release',
+    'Hand back files checked out to you without uploading (others can edit them again). Local edits stay in the folder.',
+    { local_path: z.string(), files: z.array(z.string()).optional().describe('Defaults to every file checked out to you in this folder.') },
+    async ({ local_path, files }) => ws.release({ localPath: local_path, files }),
+  );
+
+  tool(
+    server,
+    'workspace_move',
+    'Rename or move a file or folder inside a synced folder, in SharePoint and locally at once. Creates destination folders as needed. Use this to organise.',
+    { local_path: z.string(), from: z.string().describe('Current path relative to the folder.'), to: z.string().describe('New path relative to the folder.') },
+    async ({ local_path, from, to }) => ws.move({ localPath: local_path, from, to }),
+    { write: true },
+  );
+
+  tool(server, 'workspace_list', 'List the synced folders on this computer, and every file checked out to you.', {}, async () => ({
+    folders: ws.listWorkspaces().map((w) => ({ name: w.name, local_path: w.localPath, sharepoint: w.webUrl, last_pulled: w.lastPulled, present: w.exists })),
+    checked_out_to_you: ws.heldFiles().map((h) => ({ folder: h.localPath, file: h.file, since: h.since, edited: h.edited })),
+  }));
 
   const cfg = loadConfig();
   if (hasPack(cfg, 'mail')) registerMail(server);
   if (hasPack(cfg, 'calendar')) registerCalendar(server);
   registerGraphRequest(server);
+  return server;
+}
 
-  await server.connect(new StdioServerTransport());
+export async function startMcp() {
+  await createServer().connect(new StdioServerTransport());
+}
+
+/** MCP over HTTP for the background service. Stateless: one server per request. */
+export async function handleMcpHttp(req, res, body) {
+  const server = createServer();
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  res.on('close', () => { transport.close(); server.close(); });
+  await server.connect(transport);
+  await transport.handleRequest(req, res, body);
 }
 
 async function resolveFolderOrRoot(loc) {
