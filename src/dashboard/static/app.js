@@ -97,6 +97,85 @@
 
   // Firm setup progress.
   var job = document.querySelector('[data-job][data-running]');
+  // Folder picker: browse OneDrive, Shared with me and SharePoint sites, then sync the folder you're in.
+  var picker = document.getElementById('add');
+  if (picker && picker.classList.contains('picker')) {
+    var FOLDER = '<svg class="i fold" viewBox="0 0 20 20"><path d="M2.5 6A1.5 1.5 0 0 1 4 4.5h3.6l1.6 1.6h6.8A1.5 1.5 0 0 1 17.5 7.6V14.5A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z"/></svg>';
+    var SITE = '<svg class="i" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 7h6M7 10h6M7 13h3"/></svg>';
+    var listEl = picker.querySelector('[data-list]');
+    var crumbsEl = picker.querySelector('[data-crumbs]');
+    var sitesEl = picker.querySelector('[data-sites]');
+    var syncBtn = picker.querySelector('[data-sync]');
+    var srcIn = picker.querySelector('[data-source]');
+    var nameIn = picker.querySelector('[data-name]');
+    var linkIn = picker.querySelector('[data-link]');
+    var dest = picker.querySelector('[data-dest]');
+    var root = (document.querySelector('[data-dest-root]') || {}).getAttribute ? document.querySelector('[data-dest-root]').getAttribute('data-dest-root') : '';
+    var stack = [];
+    var seq = 0;
+    var started = false;
+    var api = function (u) { return fetch(u, { headers: { Accept: 'application/json' } }).then(function (r) { return r.json(); }); };
+    var setSync = function (ref, name) {
+      if (linkIn && linkIn.value.trim()) { syncBtn.disabled = false; syncBtn.textContent = 'Sync this link'; dest.textContent = ''; return; }
+      srcIn.value = ref || ''; nameIn.value = name || '';
+      syncBtn.disabled = !ref;
+      syncBtn.textContent = ref ? 'Sync “' + name + '”' : 'Choose a folder';
+      dest.textContent = ref && root ? 'Copies to ' + root + '/' + name : '';
+    };
+    var crumbs = function () {
+      crumbsEl.innerHTML = stack.map(function (c, i) { return (i ? '<span class="sep">›</span>' : '') + '<button type="button" data-crumb="' + i + '">' + esc(c.name) + '</button>'; }).join('');
+    };
+    var open = function () {
+      var top = stack[stack.length - 1];
+      var mine = ++seq;
+      crumbs();
+      setSync(null);
+      listEl.innerHTML = '<li class="pk-note"><span class="spin"></span></li>';
+      api('/api/browse?ref=' + encodeURIComponent(top.ref)).then(function (j) {
+        if (mine !== seq) return;
+        if (j.error) { listEl.innerHTML = '<li class="pk-note">' + esc(j.error) + '</li>'; return; }
+        var d = j.data;
+        if (d.syncable) setSync(d.ref, top.name);
+        if (!d.folders.length) { listEl.innerHTML = '<li class="pk-note">' + (d.syncable ? 'No folders inside' + (d.files ? ' (' + plural(d.files, 'file') + ' here)' : '') + '. You can sync this one.' : 'No folders here.') + '</li>'; return; }
+        listEl.innerHTML = d.folders.map(function (f) {
+          var meta = f.library ? 'Library' : f.by ? 'From ' + f.by : f.count != null ? plural(f.count, 'item') : '';
+          return '<li><button type="button" data-ref="' + esc(f.ref) + '" data-name="' + esc(f.name) + '">' + (f.library ? SITE : FOLDER) + '<span class="nm">' + esc(f.name) + '</span><span class="meta">' + esc(meta) + '</span><span class="chev">›</span></button></li>';
+        }).join('');
+      }).catch(function () { listEl.innerHTML = '<li class="pk-note">Could not load. Check that you are signed in.</li>'; });
+    };
+    var mark = function (el) { $$('.pk-place, .pk-site', picker).forEach(function (b) { if (b === el) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); }); };
+    var loadSites = function (q) {
+      api('/api/places?q=' + encodeURIComponent(q || '')).then(function (j) {
+        var sites = (j.data && j.data.sites) || [];
+        sitesEl.innerHTML = sites.length ? sites.map(function (s) { return '<button type="button" class="pk-site" data-place="' + esc(s.ref) + '" data-label="' + esc(s.name) + '" title="' + esc(s.url || '') + '">' + SITE + '<span>' + esc(s.name) + '</span></button>'; }).join('') : '<span class="muted small">' + (j.error ? esc(j.error) : 'No sites found') + '</span>';
+      });
+    };
+    picker.addEventListener('click', function (ev) {
+      var p = ev.target.closest('[data-place]');
+      if (p) { stack = [{ name: p.getAttribute('data-label'), ref: p.getAttribute('data-place') }]; mark(p); open(); return; }
+      var f = ev.target.closest('[data-ref]');
+      if (f) { stack.push({ name: f.getAttribute('data-name'), ref: f.getAttribute('data-ref') }); open(); return; }
+      var c = ev.target.closest('[data-crumb]');
+      if (c) { var i = Number(c.getAttribute('data-crumb')); if (i < stack.length - 1) { stack = stack.slice(0, i + 1); open(); } }
+    });
+    var timer;
+    var search = picker.querySelector('[data-site-search]');
+    if (search) search.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(function () { loadSites(search.value); }, 300); });
+    if (linkIn) linkIn.addEventListener('input', function () { var top = stack[stack.length - 1]; setSync(srcIn.value, nameIn.value); if (!linkIn.value.trim() && top) open(); });
+    document.querySelectorAll('[data-open="add"]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (started) return;
+        started = true;
+        loadSites('');
+        var first = picker.querySelector('[data-place="onedrive"]');
+        stack = [{ name: 'My OneDrive', ref: 'onedrive' }]; mark(first); open();
+      });
+    });
+  }
+
+  // /#sync opens the folder picker straight away.
+  if (location.hash === '#sync') { var ob = document.querySelector('[data-open="add"]'); if (ob) setTimeout(function () { ob.click(); }, 0); }
+
   // People picker: search, unlicensed toggle, selected count, confirm before sending.
   var filter = document.querySelector('[data-filter]');
   var plist = document.querySelector('ul.people');

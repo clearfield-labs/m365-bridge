@@ -282,7 +282,7 @@ export async function pull({ source, localPath, name } = {}) {
     const folder = await resolveItem(source);
     if (!folder.folder && !folder.root) throw new Error(`"${folder.name}" is a file. Point workspace_pull at a folder.`);
     const driveId = folder.parentReference?.driveId;
-    const label = folder.root ? 'OneDrive' : folder.name;
+    const label = folder.root ? name || (folder.webUrl?.includes('-my.sharepoint.com') ? 'OneDrive' : 'Documents') : folder.name;
     root = root || path.join(WORKSPACES_ROOT, safeName(name || label));
     if (fs.existsSync(path.join(root, MANIFEST))) {
       manifest = readManifest(root);

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 (2026-11-04)
+
+- feat: "Sync a folder" is now a folder picker: My OneDrive, Shared with me and SharePoint sites (followed first, searchable) on the left, folders with a path bar on the right, and one "Sync <folder>" button. Pasting a link is still there as "Paste a link instead". `/#sync` opens it directly
+- feat: `/api/places` and `/api/browse` (same-page only, the person's own sign-in)
+- fix: a SharePoint library root synced from the picker is named after the library, not "OneDrive"
+
 ## 0.5.2 (2026-11-04)
 
 - feat: the admin who sets up the firm gets access automatically (also checked on every admin sign-in); their row shows "You" with no checkbox

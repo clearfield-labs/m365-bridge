@@ -330,6 +330,20 @@ test('background service: Claude Code connects over HTTP with its key; browsers 
   assert.equal(await form({ Origin: 'https://evil.example.com', 'Sec-Fetch-Site': 'cross-site' }), 403, 'other site');
   assert.equal(await form({ 'Sec-Fetch-Site': 'cross-site' }), 403, 'other site without Origin');
 
+  // Folder picker: browse OneDrive and SharePoint sites as the signed-in person.
+  const api = async (p) => (await (await fetch(`http://127.0.0.1:${PORT}${p}`, { headers: { 'Sec-Fetch-Site': 'same-origin' } })).json()).data;
+  const od = await api('/api/browse?ref=onedrive');
+  assert.equal(od.syncable, false, 'the whole OneDrive is not offered for syncing');
+  const matters = od.folders.find((f) => f.name === 'Matters');
+  assert.ok(matters, JSON.stringify(od));
+  const inside = await api(`/api/browse?ref=${encodeURIComponent(matters.ref)}`);
+  assert.deepEqual(inside.folders.map((f) => f.name), ['Henderson v Acme']);
+  const pl = await api('/api/places');
+  assert.ok(pl.sites.some((x) => x.name === 'Litigation'));
+  const site = await api('/api/browse?ref=site:site1');
+  assert.equal(site.title, 'Litigation', 'a site with one library opens straight into it');
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/api/browse?ref=onedrive`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+
   const page = await (await fetch(`http://127.0.0.1:${PORT}/`)).text();
   assert.match(page, /Checked out to you/);
   assert.match(page, /Synced folders/);

@@ -127,12 +127,21 @@ ${w.webUrl ? `<a href="${e(w.webUrl)}" target="_blank" rel="noopener">${icon('op
 <button type="button" data-copy="${e(w.localPath)}">${icon('copy')}<span class="lbl">Copy folder path</span></button>
 ${form('/workspace/forget', hidden('localPath', w.localPath) + `<button type="submit">${icon('x')}Remove from list</button>`)}</div></details></div></li>`;
   });
-  return `<section class="card"><div class="card-h"><h2>${icon('folder')}Synced folders</h2><button class="btn small" type="button" data-open="add">${icon('plus')}Add folder</button></div>
-${rows.length ? `<ul class="rows">${rows.join('')}</ul>` : '<p class="empty">No folders yet. Ask Claude <q>Get the Smith matter folder from SharePoint</q> and paste the folder link, or click Add folder.</p>'}</section>
-<dialog id="add"><form method="post" action="/workspace/add" data-busy="Copying…"><h3>Add a folder</h3><p class="muted">Paste a link to a SharePoint or OneDrive folder. M365 Bridge copies it to <code>${e(tidy(s.workspacesRoot))}</code> so Claude can work on it.</p>
-<label class="lbl-f" for="src">Folder link</label><input class="input" id="src" name="source" required placeholder="https://yourfirm.sharepoint.com/sites/…" autocomplete="off">
-<label class="lbl-f" for="nm">Name on this computer <span class="muted">(optional)</span></label><input class="input" id="nm" name="name" autocomplete="off">
-<div class="dlg-act"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Add folder</button></div></form></dialog>`;
+  return `<section class="card"><div class="card-h"><h2>${icon('folder')}Synced folders</h2><button class="btn small" type="button" data-open="add" data-dest-root="${e(tidy(s.workspacesRoot))}">${icon('plus')}Sync a folder</button></div>
+${rows.length ? `<ul class="rows">${rows.join('')}</ul>` : '<p class="empty">No folders yet. Ask Claude <q>Get the Smith matter folder from SharePoint</q> and paste the folder link, or click Sync a folder.</p>'}</section>
+<dialog id="add" class="picker"><form method="post" action="/workspace/add" data-busy="Copying…">
+<div class="pk-head"><h3>Sync a folder</h3><button class="btn small icon" type="button" data-close aria-label="Close">${icon('x')}</button></div>
+<div class="pk-body"><nav class="pk-places">
+<button type="button" class="pk-place" data-place="onedrive" data-label="My OneDrive">${icon('folder')}My OneDrive</button>
+<button type="button" class="pk-place" data-place="shared" data-label="Shared with me">${icon('person')}Shared with me</button>
+<p class="pk-label">SharePoint sites</p><input class="input" type="search" placeholder="Find a site" data-site-search autocomplete="off">
+<div class="pk-sites" data-sites><span class="muted small">Loading…</span></div></nav>
+<section class="pk-main"><div class="pk-crumbs" data-crumbs></div><ul class="pk-list" data-list></ul></section></div>
+<div class="pk-foot"><input type="hidden" name="source" data-source><input type="hidden" name="name" data-name>
+<details class="pk-link"><summary>Paste a link instead</summary><input class="input" name="link" placeholder="https://yourfirm.sharepoint.com/sites/…" autocomplete="off" data-link></details>
+<span class="grow"></span><span class="muted small" data-dest></span>
+<button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit" data-sync disabled>Choose a folder</button></div>
+</form></dialog>`;
 }
 
 const PROMPTS = [

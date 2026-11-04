@@ -177,6 +177,10 @@ export function createMockGraph({ token = 'test-token', user = { name: 'Test Use
       return u ? send(res, 200, u) : err(res, 404, 'Request_ResourceNotFound', 'no user');
     }
     if (m === '/me/drive') return send(res, 200, { id: DRIVE, name: 'Documents', webUrl: HOST, quota: { used: 1e9 } });
+    if (m === '/sites') return send(res, 200, { value: [{ id: 'site1', displayName: 'Litigation', webUrl: 'https://mock.sharepoint.com/sites/Lit' }, { id: 'site2', displayName: 'Intake', webUrl: 'https://mock.sharepoint.com/sites/Intake' }] });
+    if (m === '/sites/site1') return send(res, 200, { id: 'site1', displayName: 'Litigation', webUrl: 'https://mock.sharepoint.com/sites/Lit' });
+    if (m === '/sites/site1/drives') return send(res, 200, { value: [{ id: DRIVE, name: 'Documents', webUrl: HOST }] });
+    if (m === '/me/drive/sharedWithMe') return send(res, 200, { value: [] });
     if (m === '/me/followedSites') return send(res, 200, { value: [{ id: 'site1', displayName: 'Litigation', webUrl: 'https://mock.sharepoint.com/sites/Lit' }] });
     if (m === '/me/chats') return send(res, 200, { value: [{ id: 'chat1', topic: 'Henderson team' }] });
     if (m === '/me/messages' && req.method === 'GET') return send(res, 200, { value: messages });

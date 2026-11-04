@@ -11,6 +11,7 @@ import { currentAccount, startBrowserSignIn, finishBrowserSignIn, signOut } from
 import { keyStorage } from '../vault.js';
 import { recentAudit, audit } from '../audit.js';
 import { graph } from '../graph.js';
+import { places, browse } from '../browse.js';
 import * as ws from '../workspace.js';
 import { registrationStatus, registerClaudeCode, registerClaudeDesktop } from '../register.js';
 import { serviceStatus, installService, uninstallService } from '../service.js';
@@ -197,6 +198,17 @@ async function handle(req, res) {
         return go(res, 'error', e.message);
       }
     }
+    case '/api/places':
+    case '/api/browse': {
+      // Same-page reads only; uses the person's own sign-in.
+      if (foreignOrigin) return sendJson(res, 403, { error: 'Forbidden' });
+      try {
+        const data = url.pathname === '/api/places' ? await places(url.searchParams.get('q') || '') : await browse(url.searchParams.get('ref') || 'onedrive');
+        return sendJson(res, 200, { data });
+      } catch (e) {
+        return sendJson(res, 200, { error: e.message });
+      }
+    }
     case '/api/workspace-status': {
       const wsPath = url.searchParams.get('path');
       if (!ws.listWorkspaces().some((w) => w.localPath === wsPath)) return sendJson(res, 404, { error: 'Unknown folder' });
@@ -374,7 +386,9 @@ async function post(route, body, res, back) {
     case '/service/off':
       return go(res, 'ok', `${uninstallService()} Claude can reach M365 Bridge only while this page is running.`, back);
     case '/workspace/add': {
-      const r = await ws.pull({ source: body.source?.trim(), name: body.name?.trim() || undefined });
+      const source = body.link?.trim() || body.source?.trim();
+      if (!source) throw new Error('Choose a folder, or paste a link to one.');
+      const r = await ws.pull({ source, name: body.link?.trim() ? undefined : body.name?.trim() || undefined });
       return go(res, 'ok', `Copied ${plural(r.downloaded.length, 'file')} to ${r.workspace}.${r.skipped.length ? ` Skipped ${r.skipped.length}.` : ''}`);
     }
     case '/workspace/pull': {
