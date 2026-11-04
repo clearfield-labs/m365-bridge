@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1 (2026-11-04)
+
+- feat: the install page is live at https://clearfield-labs.github.io/m365-bridge/ (org Pages site). Invitation emails now carry a personal "Install M365 Bridge" button linking to it with the setup code after # (never sent to a server), plus the code itself
+
 ## 0.8.0 (2026-11-04)
 
 - feat: one-line installers need nothing installed first. The code downloads as a zip (no Git), and if the computer has no Node.js 18+, a private copy is downloaded and checksum-verified into ~/.m365-bridge-node (no Homebrew, no winget, no admin rights, no pop-ups)

@@ -212,20 +212,18 @@ export const INSTALL_MAC = 'curl -fsSL https://raw.githubusercontent.com/clearfi
 export const INSTALL_WIN = 'irm https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.ps1 | iex';
 
 export const DEFAULT_SUBJECT = 'Claude now works with our Microsoft 365';
+export const INSTALL_PAGE = 'https://clearfield-labs.github.io/m365-bridge/';
 export const DEFAULT_MESSAGE = `Hi {first_name},
 
 I've connected Claude to our Microsoft 365. It signs in as you, so it only sees the files and email you can already open. Setup takes about two minutes.
 
-1. Install M365 Bridge.
-   Mac: open Terminal and paste
-   ${INSTALL_MAC}
-   Windows: open PowerShell and paste
-   ${INSTALL_WIN}
+1. Open this page and follow the three steps. Your setup code is already on it:
+   {install_link}
 
-2. A page opens in your browser. Paste your setup code:
+2. When the M365 Bridge page opens in your browser, paste your setup code and click "Sign in with Microsoft". Then restart Claude.
+
+Your setup code, in case you need it:
    {setup_code}
-
-3. Click "Sign in with Microsoft", then restart Claude.
 
 {admin_name}`;
 
@@ -234,7 +232,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 /** Fill the template for one person. Returns { subject, html, text }. */
 export function renderInvite({ subject = DEFAULT_SUBJECT, message = DEFAULT_MESSAGE, person, cfg, adminName }) {
   const code = makeSetupCode(cfg, { user: person.upn });
-  const vars = { first_name: String(person.name || '').split(/\s+/)[0] || 'there', name: person.name, setup_code: code, firm: cfg.firmName || '', admin_name: adminName || '' };
+  const link = `${INSTALL_PAGE}#code=${code}`; // after #, so the code never reaches a server
+  const vars = { first_name: String(person.name || '').split(/\s+/)[0] || 'there', name: person.name, setup_code: code, install_link: link, firm: cfg.firmName || '', admin_name: adminName || '' };
   const fill = (s) => s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
   const text = fill(message);
   const mono = 'font-family:Consolas,Menlo,monospace;font-size:12px;background:#f3f2f1;border:1px solid #e1dfdd;border-radius:4px;padding:6px 8px;display:inline-block;word-break:break-all';
@@ -244,6 +243,7 @@ export function renderInvite({ subject = DEFAULT_SUBJECT, message = DEFAULT_MESS
       .split('\n')
       .map((line) => {
         const t = line.trim();
+        if (t === link) return `<a href="${esc(link)}" style="display:inline-block;background:#0f6cbd;color:#fff;text-decoration:none;font-weight:600;padding:8px 16px;border-radius:4px">Install M365 Bridge</a>`;
         if (t === code || t === INSTALL_MAC || t === INSTALL_WIN) return `<span style="${mono}">${esc(t)}</span>`;
         return line;
       })

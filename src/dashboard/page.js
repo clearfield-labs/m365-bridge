@@ -308,7 +308,7 @@ function invite(s) {
   return `<section class="card" id="invite"><div class="card-h"><h2>${icon('chat')}Invite ${chosen.length === 1 ? e(chosen[0].name) : `${chosen.length} people`}</h2></div><div class="pad">
 <p class="muted">${names}. Each person gets an email from your Outlook with their own setup code. Nothing is sent until you say so.</p>
 ${form('/admin/drafts', `<label class="lbl-f" for="sj">Subject</label><input class="input" id="sj" name="subject" value="${e(subject)}">
-<label class="lbl-f" for="mg">Message <span class="muted">({first_name} and {setup_code} are filled in for each person)</span></label><textarea class="input mono" id="mg" name="message" rows="14">${e(message)}</textarea>
+<label class="lbl-f" for="mg">Message <span class="muted">({first_name}, {install_link} and {setup_code} are filled in for each person)</span></label><textarea class="input mono" id="mg" name="message" rows="14">${e(message)}</textarea>
 <details class="more"><summary>Preview for ${e(chosen[0].name)}</summary><div class="preview"><p class="lbl-f">${e(preview.subject)}</p>${preview.html}</div></details>
 <div class="row"><button class="btn primary" type="submit"${s.adminSession ? '' : ' disabled'}>Save ${chosen.length === 1 ? 'draft' : `${chosen.length} drafts`} in my Outlook</button></div>`, { busy: 'Saving drafts…' })}
 ${form('/admin/back', '<button class="link" type="submit">Cancel</button>')}</div></section>`;

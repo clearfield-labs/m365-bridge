@@ -95,6 +95,9 @@ test('step 4: drafts in the admin Outlook, each with a personal setup code, then
   const parsed = parseSetupCode(code);
   assert.equal(parsed.loginHint, 'maria@mockfirm.com', 'personal code pre-fills her sign-in');
   assert.equal(parsed.firmName, 'Henderson Law');
+  const { renderInvite } = await import('../src/provision.js');
+  const inv = renderInvite({ person: { name: 'Maria Lopez', upn: 'maria@mockfirm.com' }, cfg: { tenantId: 't', clientId: 'c', firmName: 'X', packs: [] }, adminName: 'Admin' });
+  assert.match(inv.html, /href="https:\/\/clearfield-labs\.github\.io\/m365-bridge\/#code=M365B-/, 'default email links to the install page with the code after #');
   assert.match(await page(), /Send all 2/);
   await post('/admin/send', {});
   assert.ok(mock.drafts.every((d) => d.sent));
