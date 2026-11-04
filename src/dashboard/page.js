@@ -230,7 +230,7 @@ function overview(s) {
 <dl class="facts"><dt>Claude can reach</dt><dd class="chips">${packs}</dd>
 <dt>Claude can</dt><dd>${cfg.allowWrite ? 'Read and edit, check files out, draft email' : 'Read only'}${cfg.allowDelete ? ', delete' : ''}</dd>
 <dt>Who can use it</dt><dd>${restricted === null ? 'Not loaded yet' : restricted ? 'Only people you give access to' : 'Everyone in the firm'}</dd>
-<dt>Setup code</dt><dd>${copyBox(s.setupCode, 'Copy')}<small class="muted">The same code for anyone. Invitations below give each person their own.</small></dd></dl></div></section>`;
+<dt>Setup code</dt><dd><details class="more code"><summary>Show the firm's setup code</summary>${copyBox(s.setupCode, 'Copy')}</details><small class="muted">For anyone you didn't invite by email. It isn't a password: people still sign in as themselves, and only people with access get in. Invitation emails include a personal version that fills in each person's email.</small></dd></dl></div></section>`;
 }
 
 function people(s) {

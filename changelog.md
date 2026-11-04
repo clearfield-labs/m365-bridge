@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 (2026-11-04)
+
+- fix: clearer setup-code wording on the Admin overview, and the long code is folded behind "Show the firm's setup code"
+
 ## 0.5.0 (2026-11-04)
 
 - feat: admin setup is now a four-step wizard: 1) firm name and permissions, 2) one admin approval for exactly those, 3) choose people from the firm's directory and give them access, 4) email each person their own setup code from the admin's Outlook (drafts first, then Send all). The admin sign-in stays in memory only

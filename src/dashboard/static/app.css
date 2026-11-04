@@ -256,6 +256,8 @@ dialog h3 { font-size: 20px; line-height: 28px; }
 .stepper li.done .num .i { width: 14px; height: 14px; stroke-width: 2.4; }
 details.more { margin-top: 10px; }
 details.more > summary { cursor: pointer; color: var(--brand); font-weight: 600; margin-bottom: 8px; }
+details.more.code { margin-top: 0; }
+details.more.code > summary { margin-bottom: 4px; }
 .note { margin-top: 14px; padding: 10px 12px; border-radius: 6px; background: var(--info-soft); color: var(--text); }
 .bar-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 20px; background: var(--hover); border-bottom: 1px solid var(--line); font-size: 13px; color: var(--text-2); }
 .bar-info .i { width: 16px; height: 16px; }
