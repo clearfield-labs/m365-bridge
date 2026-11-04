@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 (2026-11-04)
+
+- feat: redesigned dashboard: library-green rail, paper and brass palette, bundled Instrument Serif + Hanken Grotesk + Plex Mono (no outside requests), light and dark
+- feat: overview with a live "bridge" (Microsoft 365, you, Claude), copyable prompts, recent matters and activity
+- feat: matters as dossier cards with live SharePoint status (updates from colleagues, edits to upload), Pull latest and Upload edits buttons
+- feat: Access view in plain language, Activity as a dated timeline, Admin view with setup code, consent and a guided Entra checklist
+- feat: first-run welcome screen; add-matter dialog; toasts
+- feat: /api/workspace-status (known workspaces only) and /workspace/push
+- security: scripts and styles served as files, CSP drops inline scripts
+- fix: demo mode never writes to the real Claude config
+
 ## 0.1.1 (2026-11-04)
 
 - feat: `npm run demo` runs the dashboard against a fake Microsoft 365 with a seeded matter, for presenting without a tenant

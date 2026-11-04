@@ -33,7 +33,12 @@ function findClaudeCli() {
   }
 }
 
+// Demo mode never touches the real Claude config.
+const demo = () => process.env.M365_DEMO === '1';
+const demoState = { code: false, desktop: false };
+
 export function registrationStatus() {
+  if (demo()) return { claudeCode: demoState.code ? 'connected' : 'not connected', claudeDesktop: demoState.desktop ? 'connected' : 'not connected', desktopInstalled: true };
   const code = readJson(claudeCodeConfig())?.mcpServers?.[SERVER_NAME];
   const desktop = readJson(claudeDesktopConfig())?.mcpServers?.[SERVER_NAME];
   const current = (s) => !!s && s.args?.[0] === CLI_PATH;
@@ -45,6 +50,7 @@ export function registrationStatus() {
 }
 
 export function registerClaudeCode() {
+  if (demo()) { demoState.code = true; return 'Demo: connected to Claude Code (your real Claude settings were not changed).'; }
   const spec = serverSpec();
   const cli = findClaudeCli();
   if (cli) {
@@ -62,6 +68,7 @@ export function registerClaudeCode() {
 }
 
 export function registerClaudeDesktop() {
+  if (demo()) { demoState.desktop = true; return 'Demo: connected to Claude Desktop.'; }
   const file = claudeDesktopConfig();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const json = readJson(file) || {};

@@ -21,6 +21,7 @@ Object.assign(process.env, {
   M365_BRIDGE_KEYSTORE: 'file',
   M365_WORKSPACES: path.join(home, 'M365 Workspaces'),
   M365_BRIDGE_PORT: process.env.M365_BRIDGE_PORT || '4366',
+  M365_DEMO: '1',
 });
 
 const { updateConfig } = await import('../src/config.js');

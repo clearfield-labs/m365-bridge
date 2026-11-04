@@ -1,8 +1,10 @@
 // Local admin dashboard. Binds to 127.0.0.1 only, rejects other Host headers (DNS rebinding)
 // and cross-origin POSTs (CSRF). Never renders tokens.
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { PORT, DASHBOARD_URL, WORKSPACES_ROOT } from '../paths.js';
+import { PORT, DASHBOARD_URL, WORKSPACES_ROOT, PACKAGE_ROOT } from '../paths.js';
 import { loadConfig, updateConfig, isConfigured, validateIds, makeSetupCode, parseSetupCode } from '../config.js';
 import { currentAccount, startBrowserSignIn, finishBrowserSignIn, signOut } from '../auth.js';
 import { keyStorage } from '../vault.js';
@@ -34,7 +36,7 @@ function send(res, status, html, headers = {}) {
     'Cache-Control': 'no-store',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; form-action 'self' https://login.microsoftonline.com",
+    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.microsoftonline.com",
     ...headers,
   });
   res.end(html);
@@ -91,21 +93,64 @@ async function handle(req, res) {
       if (p.get('admin_consent') || p.get('state') === 'adminconsent') {
         audit({ tool: 'admin_consent', result: p.get('admin_consent') });
         return (p.get('admin_consent') || '').toLowerCase() === 'true'
-          ? go(res, 'ok', 'Admin consent granted for the whole firm. Each person can now sign in without a permission prompt.', '#firm')
-          : go(res, 'error', `Admin consent was not granted: ${p.get('error_description') || 'cancelled'}`, '#firm');
+          ? go(res, 'ok', 'Admin consent granted for the whole firm. Each person can now sign in without a permission prompt.', '#admin')
+          : go(res, 'error', `Admin consent was not granted: ${p.get('error_description') || 'cancelled'}`, '#admin');
       }
-      if (p.get('error')) return go(res, 'error', `Microsoft sign-in failed: ${p.get('error_description') || p.get('error')}`, '#account');
+      if (p.get('error')) return go(res, 'error', `Microsoft sign-in failed: ${p.get('error_description') || p.get('error')}`, '#overview');
       try {
         const account = await finishBrowserSignIn(p.get('code'), p.get('state'));
         audit({ tool: 'sign_in', user: account?.username });
-        return send(res, 200, renderMessage('Signed in', `You are signed in as <b>${escape(account?.username)}</b>. You can close this tab and go back to Claude.`));
+        return go(res, 'ok', `Signed in as ${account?.username}. You can go back to Claude.`, '#overview');
       } catch (e) {
-        return go(res, 'error', e.message, '#account');
+        return go(res, 'error', e.message, '#overview');
+      }
+    }
+    case '/api/workspace-status': {
+      const wsPath = url.searchParams.get('path');
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-store');
+      if (!ws.listWorkspaces().some((w) => w.localPath === wsPath)) {
+        res.writeHead(404);
+        return res.end(JSON.stringify({ error: 'Unknown workspace' }));
+      }
+      try {
+        const st = await ws.status({ localPath: wsPath, checkRemote: !!(await currentAccount()) });
+        res.writeHead(200);
+        return res.end(JSON.stringify({ data: st }));
+      } catch (e) {
+        res.writeHead(200);
+        return res.end(JSON.stringify({ error: e.message }));
       }
     }
     default:
+      if (url.pathname.startsWith('/assets/fonts/')) return sendFont(res, path.basename(url.pathname));
+      if (url.pathname === '/assets/app.css' || url.pathname === '/assets/app.js') return sendStatic(res, path.basename(url.pathname));
       return send(res, 404, renderMessage('Not found', 'Nothing here.'));
   }
+}
+
+const FONTS = {
+  'serif.woff2': '@fontsource/instrument-serif/files/instrument-serif-latin-400-normal.woff2',
+  'serif-italic.woff2': '@fontsource/instrument-serif/files/instrument-serif-latin-400-italic.woff2',
+  'sans.woff2': '@fontsource-variable/hanken-grotesk/files/hanken-grotesk-latin-wght-normal.woff2',
+  'mono.woff2': '@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2',
+};
+function sendFont(res, name) {
+  const rel = FONTS[name];
+  const file = rel && path.join(PACKAGE_ROOT, 'node_modules', rel);
+  if (!file || !fs.existsSync(file)) {
+    res.writeHead(404);
+    return res.end();
+  }
+  res.writeHead(200, { 'Content-Type': 'font/woff2', 'Cache-Control': 'public, max-age=31536000, immutable' });
+  fs.createReadStream(file).pipe(res);
+}
+
+const STATIC_TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+function sendStatic(res, name) {
+  const file = path.join(PACKAGE_ROOT, 'src', 'dashboard', 'static', name);
+  res.writeHead(200, { 'Content-Type': STATIC_TYPES[path.extname(name)], 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+  fs.createReadStream(file).pipe(res);
 }
 
 async function post(route, body, res) {
@@ -132,40 +177,47 @@ async function post(route, body, res) {
       if (before.tenantId && (before.tenantId !== patch.tenantId || before.clientId !== patch.clientId || scopesChanged)) await signOut();
       updateConfig(patch);
       audit({ tool: 'firm_setup', tenant: patch.tenantId });
-      return go(res, 'ok', 'Saved and encrypted. Next: sign in with your Microsoft account.', '#account');
+      return go(res, 'ok', 'Saved and encrypted. Next: sign in with your Microsoft account.', '#overview');
     }
     case '/signout':
       await signOut();
       audit({ tool: 'sign_out' });
-      return go(res, 'ok', 'Signed out. Your tokens were deleted from this computer.', '#account');
+      return go(res, 'ok', 'Signed out. Your tokens were deleted from this computer.', '#overview');
     case '/test': {
       const me = await graph('/me?$select=displayName,mail,userPrincipalName');
       const drive = await graph('/me/drive?$select=webUrl,quota');
       const used = drive.quota?.used ? ` (${(drive.quota.used / 1e9).toFixed(1)} GB used)` : '';
-      return go(res, 'ok', `Connected as ${me.displayName} (${me.mail || me.userPrincipalName}). OneDrive reachable${used}.`, '#account');
+      return go(res, 'ok', `Connected as ${me.displayName} (${me.mail || me.userPrincipalName}). OneDrive reachable${used}.`, '#overview');
     }
     case '/register': {
       const msgs = [];
       if (body.target === 'code' || body.target === 'both') msgs.push(registerClaudeCode());
       if (body.target === 'desktop' || body.target === 'both') msgs.push(registerClaudeDesktop());
       audit({ tool: 'register', target: body.target });
-      return go(res, 'ok', msgs.join(' '), '#claude');
+      return go(res, 'ok', msgs.join(' '), '#overview');
     }
     case '/workspace/add': {
       const r = await ws.pull({ source: body.source?.trim(), name: body.name?.trim() || undefined });
-      return go(res, r.conflicts.length ? 'warn' : 'ok', `Pulled ${r.downloaded.length} files into ${r.workspace}.${r.skipped.length ? ` Skipped ${r.skipped.length}.` : ''} Open that folder in Claude Code.`, '#workspaces');
+      return go(res, r.conflicts.length ? 'warn' : 'ok', `Pulled ${r.downloaded.length} files into ${r.workspace}.${r.skipped.length ? ` Skipped ${r.skipped.length}.` : ''} Open that folder in Claude Code.`, '#matters');
     }
     case '/workspace/pull': {
       const r = await ws.pull({ localPath: body.localPath });
       const n = r.downloaded.length + r.updated.length;
-      return go(res, r.conflicts.length ? 'warn' : 'ok', `${n} file${n === 1 ? '' : 's'} updated.${r.conflicts.length ? ` ${r.conflicts.length} conflict(s): SharePoint copies saved next to your files.` : ''}`, '#workspaces');
+      return go(res, r.conflicts.length ? 'warn' : 'ok', `${n} file${n === 1 ? '' : 's'} updated.${r.conflicts.length ? ` ${r.conflicts.length} conflict(s): SharePoint copies saved next to your files.` : ''}`, '#matters');
     }
     case '/workspace/open':
       openPath(body.localPath);
-      return go(res, 'ok', `Opened ${body.localPath}`, '#workspaces');
+      return go(res, 'ok', `Opened ${body.localPath}`, '#matters');
     case '/workspace/forget':
       ws.forgetWorkspace(body.localPath);
-      return go(res, 'ok', 'Removed from the list. The local folder and SharePoint were not touched.', '#workspaces');
+      return go(res, 'ok', 'Removed from the list. The local folder and SharePoint were not touched.', '#matters');
+    case '/workspace/push': {
+      const r = await ws.push({ localPath: body.localPath });
+      const n = r.uploaded.length + r.created.length;
+      if (r.conflicts.length) return go(res, 'warn', `${n} uploaded. ${r.conflicts.length} not uploaded because a colleague changed them in SharePoint. Pull latest, merge, then upload again.`, '#matters');
+      if (r.errors.length) return go(res, 'error', `${n} uploaded. ${r.errors[0].file}: ${r.errors[0].error}`, '#matters');
+      return go(res, 'ok', n ? `Uploaded ${n} file${n === 1 ? '' : 's'} to SharePoint as new versions.` : 'Nothing to upload. Everything matches SharePoint.', '#matters');
+    }
     default:
       return send(res, 404, renderMessage('Not found', 'Nothing here.'));
   }

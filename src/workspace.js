@@ -260,6 +260,7 @@ export async function status({ localPath, checkRemote = true }) {
       else if (versionTag(item) !== seenTag(known)) report.changed_in_sharepoint.push({ file: rel, by: personOf(item) || undefined });
     }
   }
+  report.tracked_files = Object.keys(manifest.files).length;
   report.summary = summarizeStatus(report);
   return report;
 }
