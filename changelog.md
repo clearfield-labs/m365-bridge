@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2 (4 Nov 2026)
+
+- Install page: removed stale steps (Mac password, installing Node.js or Git). The installers need neither.
+
 ## 0.8.1 (2026-11-04)
 
 - feat: the install page is live at https://clearfield-labs.github.io/m365-bridge/ (org Pages site). Invitation emails now carry a personal "Install M365 Bridge" button linking to it with the setup code after # (never sent to a server), plus the code itself
