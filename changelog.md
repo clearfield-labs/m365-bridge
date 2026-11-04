@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 (2026-11-04)
+
+- feat: one-line installers need nothing installed first. The code downloads as a zip (no Git), and if the computer has no Node.js 18+, a private copy is downloaded and checksum-verified into ~/.m365-bridge-node (no Homebrew, no winget, no admin rights, no pop-ups)
+- feat: install page (docs/index.html, for GitHub Pages): detects Mac or Windows, one Copy button, three steps with the exact keys, and shows the person's setup code when the link carries #code=
+- feat: `m365-bridge stop`; the Windows installer stops a running copy before replacing its files
+- ci: installers run on Windows, macOS and Linux the way a person would (no Git, no Node.js beforehand)
+
 ## 0.7.1 (2026-11-04)
 
 - docs: install is one command in Terminal (Mac) or PowerShell (Windows); removed "ask Claude to install it" from the README and the invitation email, since the Claude chat app runs in the cloud and cannot install on the computer

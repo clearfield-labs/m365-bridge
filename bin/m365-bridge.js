@@ -111,6 +111,11 @@ async function main() {
       console.log((await waitUntilUp()) ? `Running at ${DASHBOARD_URL}` : `Did not start. See ${FILES.daemonLog}`);
       return;
     }
+    case 'stop': {
+      // Stop the running copy (the installer uses this before replacing the files).
+      await stopRunning();
+      return;
+    }
     case 'uninstall': {
       const { uninstallService } = await import('../src/service.js');
       const { unregisterAll } = await import('../src/register.js');

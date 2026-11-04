@@ -32,6 +32,8 @@ M365 Bridge makes SharePoint and OneDrive the source of truth instead:
 
 ## Install
 
+One command, nothing to install first (no Git, no Node.js, no admin rights). Step-by-step page: [clearfield-labs.github.io/m365-bridge](https://clearfield-labs.github.io/m365-bridge/).
+
 **Mac** (Terminal):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.sh | bash
@@ -44,7 +46,7 @@ irm https://raw.githubusercontent.com/clearfield-labs/m365-bridge/main/install.p
 
 The installer runs M365 Bridge in the background from login, connects Claude Code (and the Claude chat app if installed), adds an **M365 Bridge** app or shortcut, and opens `http://localhost:4365`. Run it again to update.
 
-Requires Node.js 18 or newer (the Windows installer installs it with winget).
+If the computer has no Node.js, the installer downloads a private copy just for M365 Bridge.
 
 ## Set up a firm (admin)
 

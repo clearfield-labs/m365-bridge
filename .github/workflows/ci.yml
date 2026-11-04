@@ -21,3 +21,31 @@ jobs:
         env:
           # Also run the platform checks: OS key store, start-at-login service, Claude config and hook launch.
           M365_PLATFORM_TEST: '1'
+  installer:
+    # Runs the one-line installers the way a person would: no Git, no Node.js beforehand.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      M365_BRIDGE_REF: ${{ github.sha }}
+      M365_FORCE_PRIVATE_NODE: '1'
+      M365_INSTALL_SKIP_RUN: '1'
+      M365_BRIDGE_KEYSTORE: file
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install (Mac and Linux)
+        if: runner.os != 'Windows'
+        run: |
+          export M365_BRIDGE_DIR="$RUNNER_TEMP/app" M365_BRIDGE_NODE_DIR="$RUNNER_TEMP/node" M365_BRIDGE_HOME="$RUNNER_TEMP/data"
+          cat install.sh | bash
+          "$RUNNER_TEMP/node/bin/node" "$RUNNER_TEMP/app/bin/m365-bridge.js" status
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:M365_BRIDGE_DIR = "$env:RUNNER_TEMP\app"; $env:M365_BRIDGE_NODE_DIR = "$env:RUNNER_TEMP\node"; $env:M365_BRIDGE_HOME = "$env:RUNNER_TEMP\data"
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          & "$env:RUNNER_TEMP\node\node.exe" "$env:RUNNER_TEMP\app\bin\m365-bridge.js" status
+          if ($LASTEXITCODE -ne 0) { exit 1 }
