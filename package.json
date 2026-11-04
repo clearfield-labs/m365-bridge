@@ -1,6 +1,6 @@
 {
   "name": "m365-bridge",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Use SharePoint and OneDrive folders as the source of truth for Claude Code, the way developers use GitHub.",
   "type": "module",
   "bin": {
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node bin/m365-bridge.js",
     "serve": "node bin/m365-bridge.js serve",
-    "test": "node --test --test-timeout=60000 test/*.test.js",
+    "test": "node --test --test-timeout=60000 --test-concurrency=1 test/e2e.test.js test/platform.test.js",
     "demo": "node scripts/demo.js"
   },
   "engines": {

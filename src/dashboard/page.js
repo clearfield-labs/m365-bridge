@@ -209,10 +209,13 @@ ${copyBox(s.setupCode, 'Copy code')}
 
 function settings(s) {
   const cfg = s.cfg;
-  const packs = Object.entries(PACKS).map(([k, p]) => `<label class="check"><input type="checkbox" name="pack_${k}"${k === 'files' || (cfg.packs || []).includes(k) ? ' checked' : ''}${p.always ? ' disabled' : ''}><span>${e(p.label)}</span></label>`).join('');
+  const box = ([k, p]) => `<label class="check"><input type="checkbox" name="pack_${k}"${k === 'files' || (cfg.packs || []).includes(k) ? ' checked' : ''}${p.always ? ' disabled' : ''}><span>${e(p.label)}</span></label>`;
+  const packs = Object.entries(PACKS).filter(([, p]) => !p.optional).map(box).join('');
+  const optional = Object.entries(PACKS).filter(([, p]) => p.optional).map(box).join('');
   return `<details class="card"><summary class="card-h"><h2>${icon('shield')}Permissions</h2><span class="muted small">${scopesFor(cfg).length} Microsoft permissions</span></summary><div class="pad">
 ${form('/settings', `<label class="lbl-f" for="fn2">Firm name</label><input class="input short" id="fn2" name="firmName" value="${e(cfg.firmName)}">
 <p class="lbl-f">What Claude can reach</p><div class="checks">${packs}</div>
+<p class="lbl-f">Optional</p><div class="checks">${optional}</div>
 <p class="lbl-f">What Claude can do</p><div class="checks">
 <label class="check"><input type="checkbox" name="allowWrite"${cfg.allowWrite ? ' checked' : ''}><span>Edit and upload files, check files out, draft email</span></label>
 <label class="check"><input type="checkbox" name="allowDelete"${cfg.allowDelete ? ' checked' : ''}><span>Delete through Microsoft Graph (off is safer)</span></label></div>

@@ -24,5 +24,7 @@ if ($here -and (Test-Path (Join-Path $here 'package.json')) -and (Select-String 
 }
 
 Set-Location $Dest
-npm install --omit=dev --no-fund --no-audit
+# npm.cmd, not npm: the npm.ps1 shim is blocked where script execution is restricted (the Windows default).
+npm.cmd install --omit=dev --no-fund --no-audit
+if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
 node bin/m365-bridge.js install

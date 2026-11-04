@@ -53,7 +53,7 @@ after(async () => {
   await client?.close();
   background?.kill();
   await mock.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* Windows may hold a file briefly */ }
 });
 
 const WS = () => path.join(WS_ROOT, 'Henderson v Acme');

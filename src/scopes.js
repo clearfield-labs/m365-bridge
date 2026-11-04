@@ -48,6 +48,61 @@ export const PACKS = {
     read: ['People.Read', 'User.ReadBasic.All', 'Presence.Read.All'],
     write: ['People.Read', 'User.ReadBasic.All', 'Presence.Read.All'],
   },
+  // Optional: off unless the admin ticks them.
+  groups: {
+    label: 'Microsoft 365 groups (team sites, group plans and calendars)',
+    read: ['Group.Read.All'],
+    write: ['Group.ReadWrite.All'],
+    optional: true,
+  },
+  sitebuild: {
+    label: 'Create SharePoint libraries and lists',
+    read: [],
+    write: ['Sites.Manage.All'],
+    optional: true,
+  },
+  bookings: {
+    label: 'Microsoft Bookings (consultations)',
+    read: ['Bookings.Read.All'],
+    write: ['BookingsAppointment.ReadWrite.All'],
+    optional: true,
+  },
+  attendance: {
+    label: 'Teams meeting attendance reports',
+    read: ['OnlineMeetingArtifact.Read.All'],
+    write: ['OnlineMeetingArtifact.Read.All'],
+    optional: true,
+  },
+  rooms: {
+    label: 'Meeting rooms',
+    read: ['Place.Read.All'],
+    write: ['Place.Read.All'],
+    optional: true,
+  },
+  labels: {
+    label: 'Sensitivity labels (Confidential, Privileged)',
+    read: ['InformationProtectionPolicy.Read'],
+    write: ['InformationProtectionPolicy.Read'],
+    optional: true,
+  },
+  connectors: {
+    label: 'Content from other systems (Graph connectors)',
+    read: ['ExternalItem.Read.All'],
+    write: ['ExternalItem.Read.All'],
+    optional: true,
+  },
+  copilot: {
+    label: 'Copilot meeting recaps (needs Copilot licences)',
+    read: ['OnlineMeetingAiInsight.Read.All'],
+    write: ['OnlineMeetingAiInsight.Read.All'],
+    optional: true,
+  },
+  sitecontrol: {
+    label: 'Full control of SharePoint sites (change permissions and settings)',
+    read: [],
+    write: ['Sites.FullControl.All'],
+    optional: true,
+  },
 };
 
 export const DEFAULT_PACKS = ['files', 'mail', 'calendar', 'contacts', 'teams', 'meetings', 'tasks', 'notes', 'people'];

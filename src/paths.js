@@ -45,5 +45,11 @@ export function writePrivate(file, data) {
   ensureHome();
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, data, { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  // Windows: antivirus or a reader can hold the file for a moment; retry briefly.
+  for (let i = 0; ; i++) {
+    try { fs.renameSync(tmp, file); return; } catch (e) {
+      if (process.platform !== 'win32' || i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
 }

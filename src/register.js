@@ -33,13 +33,16 @@ function writeJson(file, json) {
 function findClaudeCli() {
   try {
     const cmd = process.platform === 'win32' ? 'where' : 'which';
-    return execFileSync(cmd, ['claude'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().split(/\r?\n/)[0].trim() || null;
+    const found = execFileSync(cmd, ['claude'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    // Node refuses to run .cmd/.bat files without a shell; on Windows use claude.exe or edit the config directly.
+    return found.find((f) => process.platform !== 'win32' || /\.exe$/i.test(f)) || null;
   } catch {
     return null;
   }
 }
 
-const q = (s) => (process.platform === 'win32' ? `"${s}"` : `'${String(s).replace(/'/g, `'\\''`)}'`);
+// Windows: forward slashes in double quotes work in cmd, PowerShell and Git Bash alike.
+const q = (s) => (process.platform === 'win32' ? `"${String(s).replace(/\\/g, '/')}"` : `'${String(s).replace(/'/g, `'\\''`)}'`);
 export const httpSpec = (token) => ({ type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${token}` } });
 export const stdioSpec = () => ({ command: NODE_PATH, args: [CLI_PATH, 'serve'], env: {} });
 export const hookCommand = () => `${q(NODE_PATH)} ${q(CLI_PATH)} hook`;

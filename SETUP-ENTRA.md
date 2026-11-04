@@ -60,6 +60,20 @@ Every scope is **delegated**. A delegated token carries the person's identity, s
 | OneNote | Notes.Read.All | Notes.ReadWrite.All |
 | People | People.Read, User.ReadBasic.All, Presence.Read.All | same |
 
+**Optional packs** (off unless ticked):
+
+| Pack | Read-only mode | Read and write mode |
+|---|---|---|
+| Microsoft 365 groups | Group.Read.All | Group.ReadWrite.All |
+| Create SharePoint libraries and lists | none | Sites.Manage.All |
+| Microsoft Bookings | Bookings.Read.All | BookingsAppointment.ReadWrite.All |
+| Teams meeting attendance reports | OnlineMeetingArtifact.Read.All | same |
+| Meeting rooms | Place.Read.All | same |
+| Sensitivity labels | InformationProtectionPolicy.Read | same |
+| Graph connectors content | ExternalItem.Read.All | same |
+| Copilot meeting recaps (needs Copilot licences) | OnlineMeetingAiInsight.Read.All | same |
+| Full control of SharePoint sites | none | Sites.FullControl.All |
+
 **Extra scopes**: type any other delegated Graph scope (for example `Bookings.Read.All`) in the dashboard. It is added to the sign-in request and the consent link.
 
 **Deletes** are off by default, even in read and write mode. Turn on "Allow deletes through Graph" in the dashboard to change that.

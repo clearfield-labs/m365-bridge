@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 (2026-11-04)
+
+- feat: optional permission packs (off by default): Microsoft 365 groups, create SharePoint libraries and lists, Bookings, meeting attendance, meeting rooms, sensitivity labels, Graph connectors, Copilot meeting recaps, full SharePoint site control. Shown under "Optional" in Permissions
+- fix(windows): installer runs npm.cmd (npm.ps1 is blocked by the default execution policy) and stops if npm fails
+- fix(windows): hook command uses forward slashes so it launches from cmd, PowerShell and Git Bash
+- fix(windows): skip claude.cmd (Node will not spawn .cmd without a shell) and edit Claude's config directly
+- fix(windows): retry atomic file saves when antivirus or a reader briefly holds the file
+- ci: GitHub Actions on Windows, macOS and Linux running the end-to-end suite plus platform checks (DPAPI/Keychain, start-at-login install, Claude config, hook launch through cmd and Git Bash, uninstall)
+
 ## 0.3.3 (2026-11-04)
 
 - fix: saving Permissions before firm setup failed (no tenant IDs yet). It now stores the choices, and setup requests exactly those
