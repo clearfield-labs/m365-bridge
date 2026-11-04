@@ -20,6 +20,7 @@ import * as provision from '../provision.js';
 import { startProvision } from '../provision.js';
 import { openBrowser } from '../browser.js';
 import { renderPage, renderMessage, renderLocked } from './page.js';
+import { syncState, onHookEvent, startAutoSync, tick } from '../autosync.js';
 import { PACKS, parseExtraScopes, adminConsentUrl } from '../scopes.js';
 
 export { openBrowser };
@@ -104,7 +105,7 @@ async function state() {
     consentUrl: isConfigured(cfg) ? adminConsentUrl(cfg, `${DASHBOARD_URL}auth/callback`) : null,
     registration: registrationStatus(),
     service: serviceStatus(),
-    workspaces: ws.listWorkspaces(),
+    workspaces: ws.listWorkspaces().map((w) => ({ ...w, auto: syncState.get(w.localPath) || null })),
     held: ws.heldFiles(),
     workspacesRoot: WORKSPACES_ROOT,
     audit: recentAudit(12),
@@ -162,6 +163,18 @@ async function handle(req, res) {
     try { body = raw ? JSON.parse(raw) : undefined; } catch { return sendJson(res, 400, { error: 'Bad JSON' }); }
     const { handleMcpHttp } = await import('../mcp.js');
     return handleMcpHttp(req, res, body);
+  }
+
+  // Claude Code's hooks (after a reply, on a message). Same key as /mcp.
+  if (req.method === 'POST' && url.pathname === '/api/hook') {
+    if (foreignOrigin || !bearerOk(req)) return sendJson(res, 401, { error: 'no' });
+    let input;
+    try { input = JSON.parse(await readRaw(req)); } catch { return sendJson(res, 400, { error: 'Bad JSON' }); }
+    try {
+      return sendJson(res, 200, { output: await onHookEvent(input) });
+    } catch (e) {
+      return sendJson(res, 200, { output: null, error: e.message });
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/shutdown') {
@@ -417,6 +430,19 @@ async function post(route, body, res, back) {
       audit({ tool: 'connect_claude' });
       return go(res, 'ok', msgs.join(' '));
     }
+    case '/auto/save': {
+      const on = body.on === '1';
+      updateConfig({ autoSave: on });
+      if (on) tick({ force: true }).catch(() => {});
+      return go(res, 'ok', on
+        ? 'Automatic saving is on. Claude\'s edits go to SharePoint when it finishes each reply.'
+        : 'Automatic saving is off. Use Send changes here, or ask Claude to send.', back);
+    }
+    case '/auto/day': {
+      const on = body.on === '1';
+      updateConfig({ dayBrief: on });
+      return go(res, 'ok', on ? 'Claude will know your calendar and unread email at the start of each session.' : 'Claude will no longer be told about your day.', back);
+    }
     case '/service/on':
       return go(res, 'ok', installService(), back);
     case '/service/off':
@@ -495,6 +521,7 @@ export function startDashboard() {
       reject(e.code === 'EADDRINUSE' ? Object.assign(new Error(`Port ${PORT} is busy.`), { code: 'EADDRINUSE' }) : e);
     });
     server.listen(PORT, '127.0.0.1', () => {
+      startAutoSync();
       // "localhost" can resolve to IPv6 first; answer there too so the Microsoft redirect always lands.
       const v6 = http.createServer(onRequest);
       v6.on('error', () => {});

@@ -44,6 +44,16 @@ async function main() {
       try {
         await startDashboard();
         console.log(`${new Date().toISOString()} M365 Bridge running at ${DASHBOARD_URL} (pid ${process.pid})`);
+        // After an update: give Claude Code the newest hooks, and the hooks their state file.
+        try {
+          const { registrationStatus, installHook } = await import('../src/register.js');
+          const { writeHookState } = await import('../src/config.js');
+          writeHookState();
+          const reg = registrationStatus();
+          if (reg.claudeCode === 'connected' && !reg.hook && process.env.M365_DEMO !== '1') installHook();
+        } catch (e) {
+          console.log(`Could not update Claude's hooks: ${e.message}`);
+        }
       } catch (e) {
         if (e.code === 'EADDRINUSE' && (await isRunning())) {
           console.log(`${new Date().toISOString()} Already running; this copy exits.`);

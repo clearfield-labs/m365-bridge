@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 (2026-11-04)
+
+- feat: automatic saving. When Claude finishes a reply (Claude Code Stop hook), edits in synced folders are sent to SharePoint as a new version, checked back in with the note "Saved automatically (via Claude)", and files checked out but not changed are handed back. A short message shows what was saved. Claude is told to push with a meaningful note when it finishes a change, so the generic note is only the fallback
+- feat: automatic refresh. When the person sends a message (UserPromptSubmit hook), the synced folder Claude works in gets the latest (8-second limit, then it carries on in the background), and Claude is told which files colleagues changed and which need a merge
+- feat: background safety net in the always-on service, every minute: saves edits nobody touched for 3 minutes (made outside Claude, say in Word, or by a script), hands back check-outs unused for 10 minutes (a closed laptop, Claude quitting mid-reply), and refreshes every synced folder every 5 minutes. Errors pause that folder quietly for 5 minutes and show on the page
+- feat: when saving finds a file that changed in SharePoint too, Claude is asked once (per reply, only in the folder it works in) to merge it. Nothing is ever overwritten; merges are never finished automatically
+- feat: Claude knows the person's day. Once per Claude Code session (and every 3 hours), Claude gets what is left on the calendar today and tomorrow, the unread email count and the latest subjects, marked as information, never instructions. New my_day tool for the Claude chat app and on request
+- feat: email is draft first, send on the person's word. mail_draft returns a draft_id, changes an existing draft (draft_id), replies (reply_to_id, reply_all, keeps the quoted thread) and forwards (forward_id). New mail_send sends a draft only after the person says so
+- feat: calendar_create (optional Teams link; invitations need the person's OK) and calendar_respond (accept, tentative, decline); calendar times come back in the computer's time zone
+- feat: the page has an Automatic section with two switches (saving, the day) for advanced users who want push and pull by hand. Claude's folder instructions follow the switch (v4)
+- fix: files and folders whose names start with a dot, Python caches and .pyc files never upload
+- perf: file hashes are remembered until a file changes on disk; one operation at a time per synced folder inside the service
+- The background service upgrades Claude Code's hooks on start after an update
+
 ## 0.8.2 (4 Nov 2026)
 
 - Install page: removed stale steps (Mac password, installing Node.js or Git). The installers need neither.

@@ -82,6 +82,14 @@ export function createMockGraph({ token = 'test-token', user = { name: 'Test Use
   ];
   const drafts = [];
   const log = [];
+  const events = [];
+  const prefer = [];
+  // Calendar times come back in the time zone Claude asked for (outlook.timezone); the mock uses this computer's.
+  const local = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19) + '.0000000';
+  const soon = new Date(Date.now() + 30 * 60000);
+  const calendar = [
+    { id: 'E1', subject: 'Henderson call', start: { dateTime: local(soon) }, end: { dateTime: local(new Date(soon.getTime() + 30 * 60000)) }, organizer: { emailAddress: { name: 'Maria Lopez', address: 'maria@mockfirm.com' } }, attendees: [{ emailAddress: { name: 'Test User', address: 'test@example.com' } }], isOnlineMeeting: true, onlineMeeting: { joinUrl: 'https://teams/x' }, responseStatus: { response: 'notResponded' } },
+  ];
 
   function send(res, status, body, headers = {}) {
     if (Buffer.isBuffer(body)) {
@@ -189,7 +197,34 @@ export function createMockGraph({ token = 'test-token', user = { name: 'Test Use
       drafts.push(d);
       return send(res, 201, d);
     }
+    if ((mm0 = /^\/me\/messages\/([^/]+)$/.exec(m)) && drafts.some((d) => d.id === mm0[1])) {
+      const d = drafts.find((x) => x.id === mm0[1]);
+      if (req.method === 'PATCH') { Object.assign(d, JSON.parse(raw)); return send(res, 200, d); }
+      return send(res, 200, { ...d, isDraft: !d.sent });
+    }
+    if ((mm0 = /^\/me\/messages\/([^/]+)\/(createReply|createReplyAll|createForward)$/.exec(m))) {
+      const orig = messages.find((x) => x.id === mm0[1]);
+      if (!orig) return err(res, 404, 'ErrorItemNotFound', 'no message');
+      const d = { id: `D${drafts.length + 1}`, webLink: 'https://outlook/draft', kind: mm0[2], subject: `${mm0[2] === 'createForward' ? 'FW' : 'RE'}: ${orig.subject}`, toRecipients: mm0[2] === 'createForward' ? [] : [orig.from], body: { contentType: 'html', content: `<hr>${orig.body.content}` } };
+      drafts.push(d);
+      return send(res, 201, d);
+    }
     if (/^\/me\/messages\/[^/]+$/.test(m)) return send(res, 200, messages.find((x) => x.id === m.split('/')[3]) || {});
+    if (m === '/me/mailFolders/inbox') return send(res, 200, { unreadItemCount: messages.length });
+    if (m === '/me/mailFolders/inbox/messages') return send(res, 200, { value: messages });
+    if (m === '/me/calendarView') { prefer.push(req.headers.prefer || ''); return send(res, 200, { value: calendar }); }
+    if (m === '/me/events' && req.method === 'POST') {
+      const b = JSON.parse(raw);
+      const ev = { id: `EV${events.length + 1}`, webLink: 'https://outlook/event', ...b, ...(b.isOnlineMeeting ? { onlineMeeting: { joinUrl: 'https://teams/new' } } : {}) };
+      events.push(ev);
+      return send(res, 201, ev);
+    }
+    if ((mm0 = /^\/me\/events\/([^/]+)\/(accept|tentativelyAccept|decline)$/.exec(m))) {
+      const ev = calendar.find((x) => x.id === mm0[1]);
+      if (!ev) return err(res, 404, 'ErrorItemNotFound', 'no event');
+      ev.responseStatus = { response: mm0[2] };
+      return send(res, 202);
+    }
     if (m === '/search/query') {
       const q = JSON.parse(raw).requests[0].query.queryString.toLowerCase();
       const hits = [...items.values()].filter((i) => !i.folder && (i.name.toLowerCase().includes(q) || i.content?.toString().toLowerCase().includes(q)));
@@ -321,6 +356,9 @@ export function createMockGraph({ token = 'test-token', user = { name: 'Test Use
     DRIVE,
     items,
     drafts,
+    events,
+    calendar,
+    prefer,
     log,
     find: (relPath) => walk('root', relPath.split('/')),
     entra,

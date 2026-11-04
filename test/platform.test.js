@@ -85,14 +85,20 @@ test('install: starts in the background, connects Claude, adds the hook', { skip
   const res = await fetch(claude.url, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: claude.headers.Authorization }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'ci', version: '1' } } }) });
   assert.equal(res.status, 200, 'Claude Code can connect with the key');
   if (process.platform === 'win32') assert.ok(fs.existsSync(path.join(env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'M365 Bridge.vbs')));
+  const hooks = JSON.parse(fs.readFileSync(path.join(HOME, '.claude', 'settings.json'), 'utf8')).hooks;
+  for (const ev of ['PreToolUse', 'Stop', 'UserPromptSubmit']) assert.ok(hooks[ev]?.some((m) => m.hooks.some((h) => /m365-bridge\.js["']? hook$/.test(h.command))), `${ev} hook`);
 });
 
 test('the hook command launches from the shells Claude Code uses, and exits fast', { skip: !ON }, async () => {
   const settings = JSON.parse(fs.readFileSync(path.join(HOME, '.claude', 'settings.json'), 'utf8'));
   const cmd = settings.hooks.PreToolUse.find((m) => m.matcher.includes('Edit')).hooks[0].command;
-  const input = JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: path.join(tmp, 'outside.txt') }, cwd: tmp });
+  const inputs = [
+    JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: path.join(tmp, 'outside.txt') }, cwd: tmp }),
+    JSON.stringify({ hook_event_name: 'Stop', cwd: tmp, session_id: 'ci' }),
+    JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: tmp, session_id: 'ci', prompt: 'hi' }),
+  ];
   const shells = process.platform === 'win32' ? [['bash', ['-c', cmd]], ['cmd.exe', ['/d', '/s', '/c', `"${cmd}"`]]] : [['/bin/sh', ['-c', cmd]]];
-  for (const [sh, args] of shells) {
+  for (const input of inputs) for (const [sh, args] of shells) {
     const t = Date.now();
     const r = await new Promise((resolve) => {
       const c = spawn(sh, args, { env, windowsVerbatimArguments: sh === 'cmd.exe' });
@@ -103,7 +109,7 @@ test('the hook command launches from the shells Claude Code uses, and exits fast
     });
     console.log(sh, r.code, `${Date.now() - t} ms`, r.o);
     assert.equal(r.code, 0, `${sh}: ${r.o}`);
-    assert.equal(r.o, '', 'files outside synced folders pass silently');
+    assert.equal(r.o, '', 'nothing to do: silent (no synced folders, not set up)');
     assert.ok(Date.now() - t < 5000, 'fast');
   }
 });
@@ -114,6 +120,8 @@ test('uninstall stops it and disconnects Claude', { skip: !ON }, async () => {
   await sleep(1500);
   assert.equal(await up(1000), false, 'stopped');
   assert.equal(JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf8')).mcpServers.m365, undefined);
+  const hooks = JSON.parse(fs.readFileSync(path.join(HOME, '.claude', 'settings.json'), 'utf8')).hooks || {};
+  assert.ok(!JSON.stringify(hooks).includes('m365-bridge'), 'all hooks removed');
 });
 
 function pathToUrl(p) {

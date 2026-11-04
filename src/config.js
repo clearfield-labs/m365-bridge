@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { FILES } from './paths.js';
+import { FILES, writePrivate } from './paths.js';
 import { readEncrypted, writeEncrypted } from './vault.js';
 import { DEFAULT_PACKS } from './scopes.js';
 
@@ -18,6 +18,8 @@ const DEFAULTS = {
   loginHint: '', // from a personal setup code: pre-fills the Microsoft sign-in
   team: null, // admin only: last loaded directory { people, restricted, fetchedAt }
   invites: {}, // admin only: userId -> { at, sent }
+  autoSave: true, // send Claude's edits to SharePoint when it finishes, hand back check-outs, refresh folders
+  dayBrief: true, // tell Claude about the person's day (calendar, unread mail) at the start of a session
 };
 
 export function loadConfig() {
@@ -34,6 +36,19 @@ export function loadConfig() {
 
 export function saveConfig(cfg) {
   writeEncrypted(FILES.config, JSON.stringify(cfg));
+  writeHookState(cfg);
+}
+
+/**
+ * Claude's hooks run often (every message, every reply), so they read this small file instead of
+ * unlocking the encrypted settings. It holds the same key that ~/.claude.json already holds for
+ * Claude Code, and the synced folder paths. Owner-only permissions.
+ */
+export function writeHookState(cfg = loadConfig()) {
+  try {
+    const data = JSON.stringify({ token: cfg.mcpToken || '', workspaces: (cfg.workspaces || []).map((w) => w.localPath), dayBrief: cfg.dayBrief !== false });
+    writePrivate(FILES.hookState, data);
+  } catch { /* the hooks fall back to doing the work themselves */ }
 }
 
 export function updateConfig(patch) {

@@ -1,8 +1,13 @@
-// Claude Code PreToolUse hook. Before Claude edits a file inside a synced folder, check it
-// out in SharePoint. If a colleague holds it, or SharePoint has a newer version, stop the
-// edit and tell Claude why. Files outside synced folders pass straight through.
+// Claude Code hooks.
+//   PreToolUse: before Claude edits a file inside a synced folder, check it out in SharePoint.
+//     If a colleague holds it, or SharePoint has a newer version, stop the edit and say why.
+//     Files outside synced folders pass straight through.
+//   Stop (Claude finished a reply) and UserPromptSubmit (the person sent a message): automatic
+//     saving, getting latest and the day's calendar. See autosync.js. The background service does
+//     the work; if it is not running, this process does.
 import fs from 'node:fs';
 import path from 'node:path';
+import { FILES, PORT } from './paths.js';
 
 // Cheap check before loading anything heavy: is this file inside a synced folder at all?
 function insideSyncedFolder(target) {
@@ -31,6 +36,9 @@ const decide = (decision, reason) => {
 export async function runHook() {
   let input = {};
   try { input = JSON.parse(await readStdin()); } catch { return; }
+  const event = input.hook_event_name || 'PreToolUse';
+  if (event === 'Stop' || event === 'UserPromptSubmit') return afterTurnOrPrompt(input);
+  if (event !== 'PreToolUse') return;
   const ti = input.tool_input || {};
   const file = ti.file_path || ti.notebook_path;
   if (!file) return;
@@ -63,4 +71,37 @@ export async function runHook() {
   } catch (e) {
     return decide('deny', `Could not check ${hit.rel} out in SharePoint: ${e.message}`);
   }
+}
+
+function readHookState() {
+  try { return JSON.parse(fs.readFileSync(FILES.hookState, 'utf8')); } catch { return null; }
+}
+
+async function afterTurnOrPrompt(input) {
+  const hs = readHookState();
+  if (!hs) return; // M365 Bridge is not set up on this computer
+  const hasFolders = (hs.workspaces || []).length > 0;
+  // Nothing to do: no synced folders, and (for a message) no day to tell Claude about.
+  if (!hasFolders && !(input.hook_event_name === 'UserPromptSubmit' && hs.dayBrief)) return;
+  let out;
+  try {
+    if (!hs.token) throw new Error('no key');
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/hook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${hs.token}` },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(input.hook_event_name === 'Stop' ? 100_000 : 25_000),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    out = (await r.json()).output;
+  } catch {
+    // The background service is not running: do it here.
+    try {
+      const { onHookEvent } = await import('./autosync.js');
+      out = await onHookEvent(input);
+    } catch {
+      return; // never break Claude over this
+    }
+  }
+  if (out) process.stdout.write(JSON.stringify(out));
 }

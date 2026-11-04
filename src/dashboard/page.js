@@ -123,13 +123,13 @@ function held(s) {
 <td class="row-act">${send}${form('/release', hidden('localPath', h.localPath) + hidden('file', h.file) + '<button class="btn small" type="submit" title="Let colleagues edit it again">Release</button>', { busy: 'Releasing…' })}</td></tr>`;
   });
   return `<section class="card"><div class="card-h"><h2>${icon('lock')}Checked out to you</h2>${s.held.length ? `<span class="count">${s.held.length}</span>` : ''}</div>
-${rows.length ? `<table class="list"><tbody>${rows.join('')}</tbody></table>` : '<p class="empty">Nothing checked out. When Claude edits a SharePoint or OneDrive file, the file is checked out to you so nobody else can change it at the same time. It shows here until it is sent back.</p>'}</section>`;
+${rows.length ? `<table class="list"><tbody>${rows.join('')}</tbody></table>` : `<p class="empty">Nothing checked out. When Claude edits a SharePoint or OneDrive file, it is checked out to you so nobody else can change it at the same time.${s.cfg.autoSave !== false ? ' It is checked back in on its own when Claude finishes.' : ' It shows here until it is sent back.'}</p>`}</section>`;
 }
 
 function folders(s) {
   const rows = s.workspaces.filter((w) => w.exists).map((w) => {
     const where = /-my\.sharepoint\.com|\/personal\//.test(w.webUrl || '') ? 'OneDrive' : 'SharePoint';
-    return `<li data-ws-path="${e(w.localPath)}"><div class="fname">${icon('folder', 'i fold')}<div><b>${e(w.name)}</b><small>${e(tidy(w.localPath))} · synced <time data-rel datetime="${e(w.lastPulled)}"></time></small><div class="status"><span class="pill">Checking…</span></div></div></div>
+    return `<li data-ws-path="${e(w.localPath)}"><div class="fname">${icon('folder', 'i fold')}<div><b>${e(w.name)}</b><small>${e(tidy(w.localPath))} · synced <time data-rel datetime="${e(w.lastPulled)}"></time>${w.auto?.lastSave ? ` · saved <time data-rel datetime="${e(w.auto.lastSave)}"></time>` : ''}</small>${w.auto?.problem ? `<small class="warn-text">Automatic sync is paused: ${e(w.auto.problem)}</small>` : ''}<div class="status"><span class="pill">Checking…</span></div></div></div>
 <div class="row-act">${form('/workspace/pull', hidden('localPath', w.localPath) + `<button class="btn small" type="submit" data-pull>${icon('down')}Get latest</button>`, { busy: 'Getting…' })}
 ${form('/workspace/push', hidden('localPath', w.localPath) + `<button class="btn small primary" type="submit" data-upload hidden>${icon('up')}Send changes</button>`, { busy: 'Sending…' })}
 <details class="menu"><summary class="btn small icon" aria-label="More">${icon('more')}</summary><div class="pop">
@@ -155,11 +155,27 @@ ${rows.length ? `<ul class="rows">${rows.join('')}</ul>` : '<p class="empty">No 
 </form></dialog>`;
 }
 
+function automatic(s) {
+  const row = (on, action, title, desc) => `<li><div class="fname">${icon(on ? 'check' : 'x', on ? 'i ok' : 'i')}<div><b>${title}</b><small>${desc}</small></div></div>
+<div class="row-act">${form(action, hidden('on', on ? '0' : '1') + `<button class="btn small${on ? '' : ' primary'}" type="submit">${on ? 'Turn off' : 'Turn on'}</button>`, { busy: 'Saving…' })}</div></li>`;
+  const save = s.cfg.autoSave !== false;
+  const day = s.cfg.dayBrief !== false;
+  return `<section class="card"><div class="card-h"><h2>${icon('activity')}Automatic</h2></div><ul class="rows">
+${row(save, '/auto/save', save ? 'Saves to SharePoint by itself' : 'Saving to SharePoint is manual',
+    save ? 'When Claude finishes a reply, its edits go to SharePoint as a new version and the files are checked back in. Synced folders refresh every few minutes.'
+      : 'Click Send changes on a folder, or ask Claude to send. Files stay checked out to you until then.')}
+${row(day, '/auto/day', day ? 'Claude knows your day' : 'Claude is not told about your day',
+    day ? 'At the start of each Claude Code session, Claude sees what is left on your calendar today and tomorrow, and your unread email.'
+      : 'Claude looks at your calendar and email only when you ask.')}
+</ul></section>`;
+}
+
 const PROMPTS = [
   'Get the Smith matter folder from SharePoint. [paste the folder link]',
-  'Update the timeline with the dates from the deposition transcript, show me the changes, then send it back to SharePoint.',
+  'Update the timeline with the dates from the deposition transcript.',
+  'What do I have today, and is there anything in my inbox I should deal with first?',
   'Organise the Smith folder: put pleadings, discovery and correspondence in their own folders.',
-  'Find the settlement email from opposing counsel and draft a reply for me to review.',
+  'Find the settlement email from opposing counsel and draft a reply. I\'ll tell you when to send it.',
 ];
 function prompts() {
   return `<section class="card"><div class="card-h"><h2>${icon('chat')}Try asking Claude</h2><span class="muted small">Click to copy</span></div><ul class="prompts">${PROMPTS.map((p) => `<li><button type="button" data-copy="${e(p)}"><span>${e(p)}</span><span class="lbl">Copy</span></button></li>`).join('')}</ul></section>`;
@@ -170,11 +186,12 @@ const ACT = {
   connect_claude: 'Connected Claude', search: 'Searched', read_file: 'Read', download: 'Downloaded', upload: 'Uploaded', create_folder: 'Created a folder', move: 'Moved',
   workspace_pull: 'Got latest', workspace_push: 'Sent to SharePoint', workspace_lock: 'Checked out', workspace_release: 'Released', workspace_merge: 'Merging',
   workspace_move: 'Moved', restore_version: 'Restored a version', mail_search: 'Searched email', mail_read: 'Read an email', mail_draft: 'Drafted an email',
-  mail_send: 'Sent an email', graph_request: 'Microsoft 365 request',
+  mail_send: 'Sent an email', graph_request: 'Microsoft 365 request', calendar_create: 'Added to calendar', calendar_respond: 'Answered an invitation',
 };
 function detailOf(a) {
   if (a.error) return a.error;
   if (a.tool === 'workspace_push') return [Array.isArray(a.uploaded) && a.uploaded.join(', '), a.note].filter(Boolean).join(' · ') || 'Nothing to send';
+  if (a.tool === 'workspace_pull' && a.auto) return `${a.downloaded || 0} new from SharePoint${a.needs_merge ? `, ${a.needs_merge} to merge` : ''}`;
   if (a.tool === 'workspace_lock' && Array.isArray(a.locked)) return a.locked.join(', ');
   if (a.tool === 'workspace_move') return `${a.from} → ${a.to}`;
   if (a.target && /^https?:/.test(a.target)) {
@@ -194,7 +211,7 @@ function activity(s) {
 function home(s) {
   const ready = s.configured && s.account;
   return `<div class="head"><h1>Microsoft 365 for Claude</h1><p>Claude works in your SharePoint, OneDrive, Outlook and Teams as you. It sees only what you can already open.</p></div>
-${setup(s)}${ready ? held(s) + folders(s) + prompts() : ''}${activity(s)}`;
+${setup(s)}${ready ? held(s) + folders(s) + automatic(s) + prompts() : ''}${activity(s)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +349,7 @@ function computer(s) {
   const bg = s.service;
   return `<section class="card"><div class="card-h"><h2>${icon('power')}This computer</h2><span class="muted small">Version ${e(s.version)}</span></div><div class="pad">
 <dl class="facts"><dt>Background service</dt><dd>${bg.installed ? `On${bg.running === false ? ' (not running right now)' : ''}` : 'Off'} ${form(bg.installed ? '/service/off' : '/service/on', `<button class="link" type="submit">${bg.installed ? 'Turn off' : 'Turn on'}</button>`, { back: 'admin', cls: 'inline-form' })}</dd>
-<dt>Claude Code</dt><dd>${e(s.registration.claudeCode)}${s.registration.hook ? ', check-out on edit is on' : ''}</dd>
+<dt>Claude Code</dt><dd>${e(s.registration.claudeCode)}${s.registration.hook ? ', automatic check-out and saving hooks are on' : ''}</dd>
 <dt>Encryption key</dt><dd>${e(s.keyStorage)}</dd>
 <dt>Synced folders</dt><dd><code>${e(tidy(s.workspacesRoot))}</code></dd></dl></div></section>`;
 }

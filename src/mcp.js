@@ -48,13 +48,17 @@ const INSTRUCTIONS = `Microsoft 365 for this firm, signed in as the person using
 
 Setup: if a tool says M365 is not set up, ask the person for the setup code from their admin and call setup. If they are the admin and there is no code yet, call firm_setup. If not signed in, call sign_in.
 
-Matter folders work like git:
-- workspace_pull copies a SharePoint or OneDrive folder to ~/M365 Workspaces (or refreshes it).
-- Before changing an existing file, workspace_lock checks it out in SharePoint so nobody else can save it. Edits through Edit/Write lock automatically; scripts that edit .docx files need the call. If a colleague holds the file, do not edit it; say who has it.
-- workspace_push uploads edits and checks them in with a short note (shown in SharePoint version history). Show the person what will upload first.
+Synced folders (local copies of SharePoint or OneDrive folders in ~/M365 Workspaces):
+- workspace_pull makes a synced folder from a folder link. After that M365 Bridge keeps it current on its own.
+- In Claude Code, saving is automatic: edits through Edit/Write check the file out in SharePoint first, and when you finish your reply the edits are sent and checked back in. When you finish a change, call workspace_push with a short note saying what changed (it shows in SharePoint version history); you do not need to ask first, since every version can be restored.
+- Scripts that edit a file (for example a .docx through Python) skip the automatic check-out: call workspace_lock first. If a colleague holds the file, do not edit it; say who has it.
 - If a file needs a merge, call workspace_merge and combine both versions into the one file. Never leave a second copy.
 - workspace_move renames or moves files and folders in SharePoint and locally together. Use it to organise.
-- workspace_release hands back files you locked but did not change.
+- workspace_status and workspace_release are there for when the person asks.
+
+Email: always draft first with mail_draft and show the person the draft (to, subject, the text). Change it with mail_draft and draft_id when they ask. Call mail_send only after the person clearly says to send that email. Never send on your own initiative.
+
+Calendar: my_day gives today and tomorrow at a glance; calendar_view for any range. Before calendar_create with attendees (it sends invitations) or calendar_respond, confirm with the person.
 
 For quick lookups without a local copy use search, list_folder and read_file.`;
 
@@ -361,7 +365,7 @@ export function createServer() {
   tool(
     server,
     'workspace_push',
-    'Upload edits to SharePoint and check them in with a note (like git commit + push). Each file becomes one new version; the note shows in version history. Files locked but unchanged are released. Never deletes anything in SharePoint.',
+    'Send edits to SharePoint now and check them in with a note saying what changed (like git commit + push). Each file becomes one new version; the note shows in version history. Files checked out but unchanged are released. Never deletes anything in SharePoint. Claude Code also does this automatically when you finish a reply, with a generic note, so calling it is how you give the version a meaningful note.',
     {
       local_path: z.string(),
       note: z.string().optional().describe('What changed, in a few words. Shown in SharePoint version history.'),
@@ -511,27 +515,47 @@ function registerMail(server) {
   tool(
     server,
     'mail_draft',
-    'Write an email as a DRAFT in Outlook (the person reviews and sends it). Set send_now only when the person has explicitly approved sending this exact email.',
+    'Write an email as a DRAFT in the person\'s Outlook Drafts folder, then show them the draft. To change it, call again with draft_id. To send it once they say so, call mail_send with the draft id. Also for replies (reply_to_id, reply_all) and forwards (forward_id).',
     {
-      to: z.array(z.string()),
-      subject: z.string(),
-      body: z.string().describe('Plain text or HTML.'),
+      to: z.array(z.string()).optional().describe('Recipients. For a reply, leave empty to reply to the sender (or everyone with reply_all).'),
+      subject: z.string().optional().describe('Leave empty on a reply or forward to keep "RE:"/"FW:" and the original subject.'),
+      body: z.string().describe('Plain text or HTML. On a reply or forward, the original message is kept below it.'),
       cc: z.array(z.string()).optional(),
-      reply_to_id: z.string().optional().describe('Reply to this message id instead of starting a new thread.'),
+      bcc: z.array(z.string()).optional(),
+      reply_to_id: z.string().optional().describe('Reply to this message id (keeps the thread).'),
+      reply_all: z.boolean().optional().describe('With reply_to_id: reply to everyone on the thread.'),
+      forward_id: z.string().optional().describe('Forward this message id.'),
+      draft_id: z.string().optional().describe('Change this existing draft instead of making a new one.'),
       attach: z.array(z.string()).optional().describe('Local file paths to attach (each under 3 MB).'),
-      mailbox: z.string().optional().describe('Send from a shared mailbox you have Send As rights to.'),
-      send_now: z.boolean().optional(),
+      mailbox: z.string().optional().describe('Draft in (and later send from) a shared mailbox you have Send As rights to.'),
+      send_now: z.boolean().optional().describe('Only when the person has already approved sending this exact email. Prefer mail_send after showing the draft.'),
     },
-    async ({ to, subject, body, cc = [], reply_to_id, attach = [], mailbox: mb, send_now = false }) => {
+    async ({ to = [], subject, body, cc = [], bcc = [], reply_to_id, reply_all = false, forward_id, draft_id, attach = [], mailbox: mb, send_now = false }) => {
       const rcpt = (list) => list.map((address) => ({ emailAddress: { address } }));
       const isHtml = /<[a-z][\s\S]*>/i.test(body);
-      const message = { subject, body: { contentType: isHtml ? 'HTML' : 'Text', content: body }, toRecipients: rcpt(to), ccRecipients: rcpt(cc) };
+      const html = isHtml ? body : `<div>${body.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>`;
+      const patch = {
+        ...(subject ? { subject } : {}),
+        ...(to.length ? { toRecipients: rcpt(to) } : {}),
+        ...(cc.length ? { ccRecipients: rcpt(cc) } : {}),
+        ...(bcc.length ? { bccRecipients: rcpt(bcc) } : {}),
+      };
       let draft;
-      if (reply_to_id) {
-        draft = await graph(`${mailbox(mb)}/messages/${encodeURIComponent(reply_to_id)}/createReply`, { method: 'POST', body: {} });
-        await graph(`${mailbox(mb)}/messages/${draft.id}`, { method: 'PATCH', body: message });
+      if (draft_id) {
+        draft = await graph(`${mailbox(mb)}/messages/${encodeURIComponent(draft_id)}?$select=id,isDraft,webLink,subject,toRecipients`);
+        if (draft.isDraft === false) throw new Error('That email was already sent. Make a new draft instead.');
+        await graph(`${mailbox(mb)}/messages/${draft.id}`, { method: 'PATCH', body: { ...patch, body: { contentType: 'HTML', content: html } } });
+      } else if (reply_to_id || forward_id) {
+        // Outlook builds the reply or forward with the original message quoted; our text goes on top.
+        const id = encodeURIComponent(reply_to_id || forward_id);
+        const action = forward_id ? 'createForward' : reply_all ? 'createReplyAll' : 'createReply';
+        draft = await graph(`${mailbox(mb)}/messages/${id}/${action}`, { method: 'POST', body: {} });
+        const full = await graph(`${mailbox(mb)}/messages/${draft.id}?$select=body`).catch(() => null);
+        const quoted = full?.body?.content || '';
+        await graph(`${mailbox(mb)}/messages/${draft.id}`, { method: 'PATCH', body: { ...patch, body: { contentType: 'HTML', content: `${html}${quoted}` } } });
       } else {
-        draft = await graph(`${mailbox(mb)}/messages`, { method: 'POST', body: message });
+        if (!to.length || !subject) throw new Error('A new email needs to and subject.');
+        draft = await graph(`${mailbox(mb)}/messages`, { method: 'POST', body: { ...patch, body: { contentType: isHtml ? 'HTML' : 'Text', content: body } } });
       }
       for (const file of attach) {
         const buf = fs.readFileSync(path.resolve(file));
@@ -543,10 +567,33 @@ function registerMail(server) {
       if (send_now) {
         await graph(`${mailbox(mb)}/messages/${draft.id}/send`, { method: 'POST' });
         audit({ tool: 'mail_send', to, subject, mailbox: mb });
-        return `Sent "${subject}" to ${to.join(', ')}.`;
+        return `Sent "${subject || draft.subject || 'the email'}"${to.length ? ` to ${to.join(', ')}` : ''}.`;
       }
-      audit({ tool: 'mail_draft', to, subject, mailbox: mb });
-      return { draft_saved: true, subject, open_in_outlook: draft.webLink };
+      audit({ tool: 'mail_draft', to, subject: subject || draft.subject, mailbox: mb });
+      return {
+        draft_saved: true,
+        draft_id: draft.id,
+        subject: subject || draft.subject,
+        open_in_outlook: draft.webLink,
+        next: 'Show the person the draft. Send it with mail_send and this draft_id only when they say so.',
+      };
+    },
+    { write: true },
+  );
+
+  tool(
+    server,
+    'mail_send',
+    'Send a draft that the person has seen and told you to send. Pass the draft_id from mail_draft. Never call this without the person clearly saying to send.',
+    { draft_id: z.string(), mailbox: z.string().optional() },
+    async ({ draft_id, mailbox: mb }) => {
+      const d = await graph(`${mailbox(mb)}/messages/${encodeURIComponent(draft_id)}?$select=id,subject,isDraft,toRecipients,ccRecipients`);
+      if (d.isDraft === false) return `"${d.subject}" was already sent.`;
+      const to = [...(d.toRecipients || []), ...(d.ccRecipients || [])].map((r) => r.emailAddress?.address).filter(Boolean);
+      if (!to.length) throw new Error('This draft has no recipients yet. Add them with mail_draft and draft_id.');
+      await graph(`${mailbox(mb)}/messages/${encodeURIComponent(draft_id)}/send`, { method: 'POST' });
+      audit({ tool: 'mail_send', to, subject: d.subject, mailbox: mb });
+      return `Sent "${d.subject}" to ${to.join(', ')}. It is in Sent Items.`;
     },
     { write: true },
   );
@@ -563,9 +610,11 @@ function registerCalendar(server) {
       calendar_owner: z.string().optional(),
     },
     async ({ start, end, calendar_owner }) => {
-      const q = new URLSearchParams({ startDateTime: new Date(start).toISOString(), endDateTime: new Date(end).toISOString(), $top: '100', $orderby: 'start/dateTime', $select: 'subject,start,end,location,organizer,attendees,isOnlineMeeting,onlineMeeting,webLink,bodyPreview' });
-      const events = await graphAll(`${mailbox(calendar_owner)}/calendarView?${q}`, 300);
+      const q = new URLSearchParams({ startDateTime: new Date(start).toISOString(), endDateTime: new Date(end).toISOString(), $top: '100', $orderby: 'start/dateTime', $select: 'id,subject,start,end,location,organizer,attendees,isOnlineMeeting,onlineMeeting,webLink,bodyPreview,responseStatus' });
+      const events = await graphAll(`${mailbox(calendar_owner)}/calendarView?${q}`, 300, { headers: { Prefer: `outlook.timezone="${localTz()}"` } });
       return events.map((e) => ({
+        id: e.id,
+        your_response: e.responseStatus?.response,
         subject: e.subject,
         start: e.start?.dateTime,
         end: e.end?.dateTime,
@@ -579,7 +628,69 @@ function registerCalendar(server) {
       }));
     },
   );
+
+  tool(server, 'my_day', 'The person\'s day at a glance: what is left on their calendar today, tomorrow\'s meetings, and unread email. Use it when they ask about their day or what to work on.', {}, async () => {
+    const { myDay } = await import('./day.js');
+    return myDay();
+  });
+
+  tool(
+    server,
+    'calendar_create',
+    'Add an event to the person\'s calendar. With attendees, Outlook sends them invitations as soon as it is created, so confirm the details with the person first. teams: true adds a Teams meeting link.',
+    {
+      subject: z.string(),
+      start: z.string().describe('Local date-time, e.g. 2026-11-05T14:00'),
+      end: z.string().describe('Local date-time'),
+      attendees: z.array(z.string()).optional().describe('Email addresses. They get an invitation.'),
+      location: z.string().optional(),
+      body: z.string().optional(),
+      teams: z.boolean().optional(),
+      all_day: z.boolean().optional(),
+    },
+    async ({ subject, start, end, attendees = [], location, body, teams = false, all_day = false }) => {
+      const tz = localTz();
+      const ev = await graph('/me/events', {
+        method: 'POST',
+        headers: { Prefer: `outlook.timezone="${tz}"` },
+        body: {
+          subject,
+          start: { dateTime: start, timeZone: tz },
+          end: { dateTime: end, timeZone: tz },
+          isAllDay: all_day,
+          ...(location ? { location: { displayName: location } } : {}),
+          ...(body ? { body: { contentType: 'Text', content: body } } : {}),
+          attendees: attendees.map((address) => ({ emailAddress: { address }, type: 'required' })),
+          ...(teams ? { isOnlineMeeting: true, onlineMeetingProvider: 'teamsForBusiness' } : {}),
+        },
+      });
+      audit({ tool: 'calendar_create', subject, attendees: attendees.length });
+      return { created: true, id: ev.id, subject, start: ev.start?.dateTime || start, end: ev.end?.dateTime || end, invitations_sent_to: attendees, teams_link: ev.onlineMeeting?.joinUrl, url: ev.webLink };
+    },
+    { write: true },
+  );
+
+  tool(
+    server,
+    'calendar_respond',
+    'Accept, tentatively accept or decline a meeting invitation (event id from calendar_view). The organizer is told unless send_response is false. Confirm with the person first.',
+    {
+      event_id: z.string(),
+      response: z.enum(['accept', 'tentative', 'decline']),
+      comment: z.string().optional(),
+      send_response: z.boolean().optional(),
+    },
+    async ({ event_id, response, comment, send_response = true }) => {
+      const action = { accept: 'accept', tentative: 'tentativelyAccept', decline: 'decline' }[response];
+      await graph(`/me/events/${encodeURIComponent(event_id)}/${action}`, { method: 'POST', body: { comment: comment || '', sendResponse: send_response } });
+      audit({ tool: 'calendar_respond', response });
+      return `Done: ${response === 'tentative' ? 'tentatively accepted' : `${response}ed`}.${send_response ? ' The organizer was told.' : ''}`;
+    },
+    { write: true },
+  );
 }
+
+const localTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 function registerGraphRequest(server) {
   tool(

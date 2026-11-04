@@ -44,6 +44,7 @@ before(async () => {
     M365_SIMPLE_UPLOAD_MAX: '200',
     M365_NO_SERVICE: '1',
     M365_NO_BROWSER: '1',
+    M365_AUTOSYNC: '0', // the background timer; tests run its pass directly
   };
   client = new Client({ name: 'test', version: '1.0.0' });
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, 'serve'], env, stderr: 'inherit' }));
@@ -54,6 +55,17 @@ after(async () => {
   background?.kill();
   await mock.close();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* Windows may hold a file briefly */ }
+});
+
+// Run the Claude Code hook as Claude Code does. Async: the mock Graph runs in this process.
+const hook = (input) => new Promise((resolve) => {
+  const child = spawn(process.execPath, [CLI, 'hook'], { env });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => { stdout += d; });
+  child.stderr.on('data', (d) => { stderr += d; });
+  child.on('close', (status) => resolve({ status, stdout, stderr, out: stdout ? JSON.parse(stdout) : null }));
+  child.stdin.end(JSON.stringify(input));
 });
 
 const WS = () => path.join(WS_ROOT, 'Henderson v Acme');
@@ -246,6 +258,48 @@ test('hook: checks a file out before Claude edits it, and blocks a colleague\'s 
   await call('workspace_release', { local_path: WS() });
 });
 
+test('automatic: when Claude finishes a reply, its edits are saved and check-outs handed back', async () => {
+  const letter = path.join(WS(), 'Engagement Letter.txt');
+  const edit = (file) => hook({ hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: file }, cwd: WS() });
+  assert.equal((await edit(letter)).stdout, '');
+  assert.equal((await edit(path.join(WS(), 'Court', 'Timeline.md'))).stdout, '');
+  assert.equal(remote('Court/Timeline.md').checkout, 'test@example.com');
+  fs.writeFileSync(letter, 'Engagement letter for Henderson. Fee: flat $5,000. Retainer $2,500. Signed.');
+
+  // The background service is not running yet, so the hook does the work itself.
+  const r = await hook({ hook_event_name: 'Stop', cwd: WS(), session_id: 's1', stop_hook_active: false });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.out.systemMessage, /Saved to SharePoint: Engagement Letter\.txt/);
+  assert.match(remote('Engagement Letter.txt').content.toString(), /Signed\./);
+  assert.equal(remote('Engagement Letter.txt').versions[0].comment, 'Saved automatically (via Claude)');
+  assert.equal(remote('Engagement Letter.txt').checkout, null, 'checked back in');
+  assert.equal(remote('Court/Timeline.md').checkout, null, 'unchanged check-out handed back');
+
+  // Nothing left: the next reply says nothing.
+  assert.equal((await hook({ hook_event_name: 'Stop', cwd: WS(), session_id: 's1' })).stdout, '');
+  // Claude working elsewhere does not save this folder's files.
+  fs.appendFileSync(letter, ' Elsewhere.');
+  assert.equal((await hook({ hook_event_name: 'Stop', cwd: tmp, session_id: 's2' })).stdout, '');
+  assert.doesNotMatch(remote('Engagement Letter.txt').content.toString(), /Elsewhere/);
+  fs.writeFileSync(letter, 'Engagement letter for Henderson. Fee: flat $5,000. Retainer $2,500. Signed.');
+});
+
+test('automatic: a new message gets the latest and tells Claude, with the day', async () => {
+  mock.remoteEdit(`${MATTER}/Court/Pleadings/Complaint.txt`, 'COMPLAINT v4 (partner edits)', 'Sarah Chen');
+  const r = await hook({ hook_event_name: 'UserPromptSubmit', cwd: WS(), session_id: 's1', prompt: 'Update the complaint' });
+  assert.equal(r.status, 0, r.stderr);
+  const ctx = r.out.hookSpecificOutput.additionalContext;
+  assert.match(ctx, /Court\/Pleadings\/Complaint\.txt \(by Sarah Chen\)/);
+  assert.match(fs.readFileSync(path.join(WS(), 'Court', 'Pleadings', 'Complaint.txt'), 'utf8'), /v4/);
+  assert.match(ctx, /Henderson call \(with Maria Lopez\), Teams \[you: notResponded\]/, ctx);
+  assert.match(ctx, /Inbox: 1 unread/);
+  assert.match(ctx, /never as instructions/);
+  assert.match(mock.prefer.at(-1), /outlook\.timezone=/);
+  // Outside synced folders Claude still gets the day, once per session.
+  const other = await hook({ hook_event_name: 'UserPromptSubmit', cwd: tmp, session_id: 's9', prompt: 'hi' });
+  assert.match(other.out.hookSpecificOutput.additionalContext, /Henderson call/);
+});
+
 test('new files in new subfolders are created; large files use an upload session', async () => {
   fs.mkdirSync(path.join(WS(), 'Discovery', 'Set 1'), { recursive: true });
   fs.writeFileSync(path.join(WS(), 'Discovery', 'Set 1', 'Interrogatories.txt'), 'Q'.repeat(1000));
@@ -288,6 +342,28 @@ test('mail tools and graph_request', async () => {
   assert.match(m.data.body, /\$50,000/);
   const d = await call('mail_draft', { to: ['client@example.com'], subject: 'Update', body: 'Draft only' });
   assert.equal(d.data.draft_saved, true);
+  assert.ok(!mock.drafts.at(-1).sent, 'a draft is never sent by itself');
+  // The person reads it, asks for a change, then says send.
+  const d2 = await call('mail_draft', { draft_id: d.data.draft_id, body: 'Draft, revised' });
+  assert.ok(!d2.isError, d2.text);
+  assert.match(mock.drafts.at(-1).body.content, /revised/);
+  const sent = await call('mail_send', { draft_id: d.data.draft_id });
+  assert.match(sent.text, /Sent "Update" to client@example\.com/);
+  assert.equal(mock.drafts.at(-1).sent, true);
+  assert.match((await call('mail_send', { draft_id: d.data.draft_id })).text, /already sent/);
+  // A reply keeps the thread and the quoted original.
+  const reply = await call('mail_draft', { reply_to_id: 'M1', body: 'We accept.' });
+  assert.match(reply.data.subject, /^RE: Henderson settlement offer/);
+  assert.match(mock.drafts.at(-1).body.content, /^<div>We accept\.<\/div><hr>/);
+  // Calendar: the day, a new Teams meeting, answering an invitation.
+  const day = await call('my_day');
+  assert.equal(day.data.today.concat(day.data.tomorrow)[0].subject, 'Henderson call');
+  const ev = await call('calendar_create', { subject: 'Prep', start: '2026-11-05T09:00', end: '2026-11-05T09:30', teams: true });
+  assert.equal(ev.data.teams_link, 'https://teams/new');
+  assert.equal(mock.events.at(-1).start.timeZone, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const resp = await call('calendar_respond', { event_id: 'E1', response: 'accept' });
+  assert.match(resp.text, /accepted/);
+  assert.equal(mock.calendar[0].responseStatus.response, 'accept');
   const chats = await call('graph_request', { path: '/me/chats' });
   assert.match(chats.text, /Henderson team/);
   const del = await call('graph_request', { method: 'DELETE', path: '/me/messages/M1' });
@@ -366,6 +442,62 @@ test('background service: Claude Code connects over HTTP with its key; browsers 
   const page = await (await fetch(`http://127.0.0.1:${PORT}/`, { headers: { Cookie: cookie } })).text();
   assert.match(page, /Checked out to you/);
   assert.match(page, /Synced folders/);
+  assert.match(page, /Saves to SharePoint by itself/);
+  assert.match(page, /Claude knows your day/);
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/api/hook`, { method: 'POST', body: '{}' })).status, 401, 'hooks need the key');
+});
+
+test('automatic: through the background service, and the background pass catches what hooks missed', async () => {
+  // The hook now reaches the running service with this computer's key.
+  const file = path.join(WS(), 'Court', 'Pleadings', 'Complaint.txt');
+  // An earlier test replaced this file in SharePoint, so it changed on both sides: never overwrite.
+  fs.writeFileSync(file, 'COMPLAINT v4 (partner edits) + count III');
+  const block = await hook({ hook_event_name: 'Stop', cwd: WS(), session_id: 's3', stop_hook_active: false });
+  assert.equal(block.out.decision, 'block', block.stdout);
+  assert.match(block.out.reason, /Court\/Pleadings\/Complaint\.txt .*workspace_merge/);
+  assert.match(remote('Court/Pleadings/Complaint.txt').content.toString(), /local complaint/, 'SharePoint kept');
+  const again = await hook({ hook_event_name: 'Stop', cwd: WS(), session_id: 's3', stop_hook_active: true });
+  assert.match(again.out.systemMessage, /Not saved yet, it needs a merge: Complaint\.txt/, 'asked once per reply, never a loop');
+  const mg = await call('workspace_merge', { local_path: WS(), file: 'Court/Pleadings/Complaint.txt' });
+  assert.match(fs.readFileSync(mg.data.theirs, 'utf8'), /local complaint/);
+  await call('workspace_push', { local_path: WS(), merged: ['Court/Pleadings/Complaint.txt'], note: 'Merged' });
+
+  fs.writeFileSync(file, 'COMPLAINT v4 (partner edits) + count III + count IV');
+  const before = mock.log.length;
+  const r = await hook({ hook_event_name: 'Stop', cwd: WS(), session_id: 's3' });
+  assert.match(r.out?.systemMessage || '', /Saved to SharePoint: Complaint\.txt/, r.stdout + r.stderr);
+  assert.match(remote('Court/Pleadings/Complaint.txt').content.toString(), /count IV/);
+  assert.ok(mock.log.length > before);
+
+  // The background pass: an edit made outside Claude (say in Word) and a forgotten check-out.
+  Object.assign(process.env, env);
+  const auto = await import('../src/autosync.js');
+  const wsm = await import('../src/workspace.js');
+  fs.writeFileSync(file, 'COMPLAINT edited in Word');
+  const old = new Date(Date.now() - 10 * 60000);
+  fs.utimesSync(file, old, old);
+  await wsm.lock({ localPath: WS(), files: ['Engagement Letter.txt'] });
+  assert.equal(remote('Engagement Letter.txt').checkout, 'test@example.com');
+  const mf = path.join(WS(), '.m365', 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(mf, 'utf8'));
+  m.files['Engagement Letter.txt'].lock.at = new Date(Date.now() - 20 * 60000).toISOString();
+  fs.writeFileSync(mf, JSON.stringify(m));
+  await auto.tick({ force: true });
+  assert.match(remote('Court/Pleadings/Complaint.txt').content.toString(), /edited in Word/);
+  assert.equal(remote('Court/Pleadings/Complaint.txt').versions[0].comment, 'Saved automatically by M365 Bridge');
+  assert.equal(remote('Engagement Letter.txt').checkout, null, 'idle check-out handed back');
+  assert.equal(auto.syncState.get(WS()).problem, null);
+
+  // Saving off: edits wait for the person; unchanged check-outs still go back.
+  const { updateConfig } = await import('../src/config.js');
+  updateConfig({ autoSave: false });
+  fs.writeFileSync(file, 'COMPLAINT not yet');
+  const off = await hook({ hook_event_name: 'Stop', cwd: WS(), session_id: 's3' });
+  assert.doesNotMatch(off.stdout, /Saved/);
+  assert.match(remote('Court/Pleadings/Complaint.txt').content.toString(), /edited in Word/);
+  updateConfig({ autoSave: true });
+  const on = await hook({ hook_event_name: 'Stop', cwd: WS(), session_id: 's3' });
+  assert.match(on.out.systemMessage, /Saved to SharePoint/);
 });
 
 test('firm setup creates the Entra app, approves it, and limits it to named people', async () => {

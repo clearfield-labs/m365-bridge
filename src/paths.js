@@ -34,6 +34,7 @@ export const FILES = {
   keyFile: path.join(HOME, 'master.key'),
   dpapiKey: path.join(HOME, 'master.key.dpapi'),
   daemonLog: path.join(HOME, 'background.log'),
+  hookState: path.join(HOME, 'hooks.json'), // read by Claude's hooks: this computer's Claude key and synced folders
 };
 
 export function ensureHome() {

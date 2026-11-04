@@ -55,7 +55,12 @@ const q = (s) => (process.platform === 'win32' ? `"${String(s).replace(/\\/g, '/
 export const httpSpec = (token) => ({ type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${token}` } });
 export const stdioSpec = () => ({ command: NODE_PATH, args: [CLI_PATH, 'serve'], env: {} });
 export const hookCommand = () => `${q(NODE_PATH)} ${q(CLI_PATH)} hook`;
-const HOOK_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit';
+// Before an edit: check the file out. After a reply: save. On a message: get latest, and the day.
+const HOOKS = {
+  PreToolUse: { matcher: 'Edit|Write|MultiEdit|NotebookEdit', timeout: 60 },
+  Stop: { timeout: 120 },
+  UserPromptSubmit: { timeout: 30 },
+};
 const isOurHook = (h) => typeof h?.command === 'string' && /m365-bridge\.js['"]? hook$/.test(h.command);
 
 // Demo mode never touches the real Claude config.
@@ -68,12 +73,13 @@ export function registrationStatus() {
   const code = readJson(claudeCodeConfig())?.mcpServers?.[SERVER_NAME];
   const desktop = readJson(claudeDesktopConfig())?.mcpServers?.[SERVER_NAME];
   const codeOk = code?.type === 'http' && code.url === MCP_URL && token && code.headers?.Authorization === `Bearer ${token}`;
-  const hooks = readJson(claudeSettings())?.hooks?.PreToolUse || [];
+  const all = readJson(claudeSettings())?.hooks || {};
+  const has = (ev) => (all[ev] || []).some((m) => (m.hooks || []).some((h) => isOurHook(h) && h.command === hookCommand()));
   return {
     claudeCode: code ? (codeOk ? 'connected' : 'needs update') : 'not connected',
     claudeDesktop: desktop ? (desktop.args?.[0] === CLI_PATH ? 'connected' : 'needs update') : 'not connected',
     desktopInstalled: fs.existsSync(path.dirname(claudeDesktopConfig())),
-    hook: hooks.some((m) => (m.hooks || []).some((h) => isOurHook(h) && h.command === hookCommand())),
+    hook: Object.keys(HOOKS).every(has),
   };
 }
 
@@ -104,13 +110,17 @@ export function installHook() {
   const file = claudeSettings();
   const json = readJsonForEdit(file);
   json.hooks = json.hooks || {};
-  const list = (json.hooks.PreToolUse || [])
-    .map((m) => ({ ...m, hooks: (m.hooks || []).filter((h) => !isOurHook(h)) }))
-    .filter((m) => m.hooks.length);
-  list.push({ matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: hookCommand(), timeout: 60 }] });
-  json.hooks.PreToolUse = list;
+  for (const [event, { matcher, timeout }] of Object.entries(HOOKS)) {
+    const list = withoutOurs(json.hooks[event]);
+    list.push({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCommand(), timeout }] });
+    json.hooks[event] = list;
+  }
   writeJson(file, json);
 }
+
+const withoutOurs = (list) => (list || [])
+  .map((m) => ({ ...m, hooks: (m.hooks || []).filter((h) => !isOurHook(h)) }))
+  .filter((m) => m.hooks.length);
 
 export function registerClaudeDesktop() {
   if (demo()) { demoState.desktop = true; return 'Demo: connected to Claude Desktop.'; }
@@ -130,10 +140,12 @@ export function unregisterAll() {
     if (json?.mcpServers?.[SERVER_NAME]) { delete json.mcpServers[SERVER_NAME]; writeJson(file, json); }
   }
   const settings = readJson(claudeSettings());
-  if (settings?.hooks?.PreToolUse) {
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse
-      .map((m) => ({ ...m, hooks: (m.hooks || []).filter((h) => !isOurHook(h)) }))
-      .filter((m) => m.hooks.length);
+  if (settings?.hooks) {
+    for (const event of Object.keys(HOOKS)) {
+      if (!settings.hooks[event]) continue;
+      settings.hooks[event] = withoutOurs(settings.hooks[event]);
+      if (!settings.hooks[event].length) delete settings.hooks[event];
+    }
     writeJson(claudeSettings(), settings);
   }
 }

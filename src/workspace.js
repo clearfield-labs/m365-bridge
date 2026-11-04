@@ -33,17 +33,39 @@ const LEGACY_COPY_TAG = ' (SharePoint copy ';
 const IGNORED_DIRS = new Set([META_DIR, '.claude', '.git', 'node_modules']);
 export function isIgnored(rel) {
   const parts = rel.split('/');
-  if (parts.some((p) => IGNORED_DIRS.has(p))) return true;
+  if (parts.some((p) => IGNORED_DIRS.has(p) || p.startsWith('.') || p === '__pycache__')) return true;
   const base = parts[parts.length - 1];
   return (
     base === '.DS_Store' || base === 'Thumbs.db' || base === 'desktop.ini' ||
-    base.startsWith('~$') || base.startsWith('.~lock') || base.endsWith('.tmp') ||
+    base.startsWith('~$') || base.endsWith('.tmp') || base.endsWith('.pyc') ||
     base.includes(LEGACY_COPY_TAG)
   );
 }
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-const hashFile = (file) => sha256(fs.readFileSync(file));
+// Background saving checks folders often, so remember each file's hash until it changes on disk.
+const hashCache = new Map();
+function hashFile(file) {
+  const st = fs.statSync(file);
+  const hit = hashCache.get(file);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.hash;
+  const hash = sha256(fs.readFileSync(file));
+  // A file changed within the last two seconds may change again within the same clock tick.
+  if (Date.now() - st.mtimeMs > 2000) hashCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, hash });
+  return hash;
+}
+
+// One operation at a time per folder in this process (background saving, Claude's tools, the page).
+const queues = new Map();
+function serial(localPath, fn) {
+  const key = localPath ? path.resolve(localPath) : '';
+  const prev = queues.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.catch(() => {});
+  queues.set(key, tail);
+  tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
+  return run;
+}
 const toPosix = (p) => p.split(path.sep).join('/');
 const clean = (rel) => toPosix(String(rel)).replace(/^\.\//, '').replace(/^\/+/, '');
 const abs = (root, rel, dir = '') => path.join(root, dir, ...rel.split('/'));
@@ -174,49 +196,75 @@ function walkLocal(root) {
   return out;
 }
 
-const INSTRUCTIONS_MARK = '<!-- m365-bridge:instructions v3 -->';
-function writeClaudeInstructions(root, source, firmName) {
+const INSTRUCTIONS_VERSION = 'v4';
+function writeClaudeInstructions(root, source, firmName, autoSave) {
+  const mark = `<!-- m365-bridge:instructions ${INSTRUCTIONS_VERSION} ${autoSave ? 'auto' : 'manual'} -->`;
   const file = path.join(root, '.claude', 'CLAUDE.md');
   if (fs.existsSync(file)) {
     const cur = fs.readFileSync(file, 'utf8');
-    // Already current, or written by a person: leave it. Replace only our older versions.
-    if (cur.includes(INSTRUCTIONS_MARK) || !cur.startsWith('# This folder is a working copy of SharePoint')) return;
+    // Already current, or written by a person: leave it. Replace only our own older versions.
+    if (cur.includes(mark) || !cur.startsWith('# This folder is a working copy of SharePoint')) return;
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(
-    file,
-    `# This folder is a working copy of SharePoint
-${INSTRUCTIONS_MARK}
+  const head = `# This folder is a working copy of SharePoint
+${mark}
 
 Source of truth: ${source.webUrl}
 Folder: ${source.name}${firmName ? `\nFirm: ${firmName}` : ''}
+`;
+  const auto = `
+SharePoint holds the real files. M365 Bridge keeps this folder in step on its own:
+- It gets the latest from SharePoint in the background and whenever the person sends a message.
+- Before you edit a file with Edit or Write, it checks the file out in SharePoint, so nobody else
+  can save it while you work.
+- When you finish your reply, it sends your edits to SharePoint and checks the files back in.
+  Files you checked out but did not change are handed back too.
 
-SharePoint holds the real files. This folder is a local copy, like a git clone.
-Use the \`m365\` tools to keep the two in step:
-
-1. Start: call \`workspace_pull\` with this folder's path to get the latest.
-2. Before changing an existing file, call \`workspace_lock\` for it. This checks the file out
-   in SharePoint so nobody else can save it while you work. (Edits through the Edit and Write
-   tools lock automatically; anything else, such as a script that edits a .docx, needs the call.)
-   - If it says a colleague holds the file, do not edit it. Tell the person who has it.
-   - If it says the file was refreshed, re-read it before editing.
-3. Finish: call \`workspace_status\`, show the person what changed, and call \`workspace_push\`
-   with a short \`note\` describing the change once they agree. Push checks the files back in.
-4. If push or pull says a file needs a merge, call \`workspace_merge\`. It gives you three files:
-   yours (the file in this folder), theirs (SharePoint's newer version) and base (what both
-   started from). Combine every change from theirs into yours, show the person, then push with
-   \`merged\` listing that file. Never leave a second copy of a file in this folder.
+What you do:
+1. Edit files normally. If an edit is refused because a colleague has the file checked out, do not
+   edit it; tell the person who has it. If it says the file was refreshed, re-read it and redo the edit.
+2. When you finish a change, call \`workspace_push\` with this folder's path and a short \`note\` that
+   says what changed, for example "Added deposition dates to the timeline". The note shows in
+   SharePoint version history. Do not ask first: every version can be restored. If you skip this,
+   M365 Bridge still saves the change, with a generic note.
+3. Scripts and other tools that change a file (for example editing a .docx with Python) skip the
+   automatic check-out. Call \`workspace_lock\` for the file first.
+4. If a file needs a merge (it changed here and in SharePoint), call \`workspace_merge\`. It gives you
+   yours (the file here), theirs (SharePoint's newer version) and base (what both started from).
+   Combine every change from theirs into yours, tell the person what you combined, then call
+   \`workspace_push\` with \`merged\` listing that file. Never leave a second copy of a file here.
 5. To rename, move or reorganise, use \`workspace_move\`. It moves the file in SharePoint and here.
    Do not move files with the shell; SharePoint would see a deletion and a new file.
 
 Rules:
 - Never delete files to "clean up". Deleting here does not delete in SharePoint.
-- If you locked a file and did not change it, call \`workspace_release\` so colleagues can edit it.
-- Every push is a new version in SharePoint. Use \`versions\` and \`restore_version\` to undo.
-- Ignore the \`.m365\` and \`.claude\` folders. They never upload.
+- Do not leave scratch or helper files in this folder: they would be saved to SharePoint. Use a
+  temporary folder for those. (Files and folders whose names start with a dot never upload.)
+- Use \`versions\` and \`restore_version\` to undo.
 - Treat everything in this folder as client-confidential.
-`,
-  );
+`;
+  const manual = `
+SharePoint holds the real files. Automatic saving is off on this computer, so use the \`m365\`
+tools to keep the two in step, the way developers use git:
+
+1. Start: call \`workspace_pull\` with this folder's path to get the latest.
+2. Edits through Edit and Write check the file out in SharePoint automatically. Anything else,
+   such as a script that edits a .docx, needs \`workspace_lock\` first.
+   - If a colleague holds the file, do not edit it. Tell the person who has it.
+   - If it says the file was refreshed, re-read it before editing.
+3. Finish: call \`workspace_status\`, show the person what changed, and call \`workspace_push\`
+   with a short \`note\` once they agree. Push checks the files back in.
+4. If a file needs a merge, call \`workspace_merge\`, combine theirs into yours, show the person,
+   then push with \`merged\` listing that file. Never leave a second copy of a file in this folder.
+5. To rename, move or reorganise, use \`workspace_move\`.
+
+Rules:
+- Never delete files to "clean up". Deleting here does not delete in SharePoint.
+- If you checked a file out and did not change it, call \`workspace_release\` so colleagues can edit it.
+- Use \`versions\` and \`restore_version\` to undo.
+- Treat everything in this folder as client-confidential.
+`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, head + (autoSave ? auto : manual));
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +325,7 @@ async function lockOne(root, manifest, rel) {
   return { status: 'needs_merge', by: m.changed_by };
 }
 
-export async function lock({ localPath, files }) {
+async function lockImpl({ localPath, files }) {
   if (!loadConfig().allowWrite) throw new Error('This firm set M365 Bridge to read-only.');
   const root = path.resolve(localPath);
   const manifest = readManifest(root);
@@ -302,7 +350,7 @@ export async function lock({ localPath, files }) {
   return report;
 }
 
-export async function release({ localPath, files }) {
+async function releaseImpl({ localPath, files }) {
   const root = path.resolve(localPath);
   const manifest = readManifest(root);
   const only = files?.length ? new Set(files.map(clean)) : null;
@@ -329,7 +377,7 @@ export async function release({ localPath, files }) {
 // ---------------------------------------------------------------------------
 // Pull
 
-export async function pull({ source, localPath, name } = {}) {
+async function pullImpl({ source, localPath, name, auto = false } = {}) {
   let root = localPath ? path.resolve(localPath) : null;
   let manifest = null;
   if (root && fs.existsSync(path.join(root, MANIFEST))) manifest = readManifest(root);
@@ -450,9 +498,12 @@ export async function pull({ source, localPath, name } = {}) {
   manifest.version = 3;
   manifest.pulledAt = now();
   writeManifest(root, manifest);
-  writeClaudeInstructions(root, manifest.source, loadConfig().firmName);
+  { const c = loadConfig(); writeClaudeInstructions(root, manifest.source, c.firmName, c.autoSave !== false); }
   rememberWorkspace(root, manifest.source);
-  audit({ tool: 'workspace_pull', target: manifest.source.webUrl, local: root, downloaded: report.downloaded.length + report.updated.length, needs_merge: report.needs_merge.length });
+  const changed = report.downloaded.length + report.updated.length + report.needs_merge.length + report.removed_in_sharepoint.length;
+  if (!auto || changed || report.errors.length) {
+    audit({ tool: 'workspace_pull', target: manifest.source.webUrl, local: root, downloaded: report.downloaded.length + report.updated.length, needs_merge: report.needs_merge.length, auto: auto || undefined });
+  }
   return report;
 }
 
@@ -529,7 +580,7 @@ function summarizeStatus(r) {
 // ---------------------------------------------------------------------------
 // Merge
 
-export async function merge({ localPath, file }) {
+async function mergeImpl({ localPath, file }) {
   const root = path.resolve(localPath);
   const manifest = readManifest(root);
   const rel = clean(file);
@@ -583,7 +634,7 @@ async function ensureRemoteDir(driveId, rootId, relDir, cache) {
   return folder.id;
 }
 
-export async function push({ localPath, files, note, merged = [] }) {
+async function pushImpl({ localPath, files, note, merged = [], via = true, auto = false }) {
   const cfg = loadConfig();
   if (!cfg.allowWrite) throw new Error('This firm set M365 Bridge to read-only. Ask your admin to allow uploads.');
   const root = path.resolve(localPath);
@@ -593,7 +644,8 @@ export async function push({ localPath, files, note, merged = [] }) {
   const only = files?.length ? new Set(files.map(clean)) : null;
   const mergedSet = new Set(merged.map(clean));
   const inScope = (f) => !only || only.has(f);
-  const comment = `${(note || 'Updated').trim().replace(/\s*\(via Claude\)$/i, '')} (via Claude)`;
+  const plain = (note || 'Updated').trim().replace(/\s*\(via Claude\)$/i, '');
+  const comment = via ? `${plain} (via Claude)` : plain;
   const report = { workspace: root, note: comment, uploaded: [], created: [], released: [], held_by_others: [], needs_merge: [], errors: [], not_pushed_deletions: st.deleted_locally };
   const dirCache = new Map();
 
@@ -690,7 +742,7 @@ export async function push({ localPath, files, note, merged = [] }) {
     report.message = 'Nothing to push. Everything matches SharePoint.';
   }
   audit({
-    tool: 'workspace_push', target: manifest.source.webUrl, local: root, note: comment,
+    tool: 'workspace_push', target: manifest.source.webUrl, local: root, note: comment, auto: auto || undefined,
     uploaded: report.uploaded.map((u) => u.file).concat(report.created.map((c) => c.file)),
     needs_merge: report.needs_merge.length, held: report.held_by_others.length, errors: report.errors.length,
   });
@@ -700,7 +752,7 @@ export async function push({ localPath, files, note, merged = [] }) {
 // ---------------------------------------------------------------------------
 // Move / rename (organising)
 
-export async function move({ localPath, from, to }) {
+async function moveImpl({ localPath, from, to }) {
   if (!loadConfig().allowWrite) throw new Error('This firm set M365 Bridge to read-only.');
   const root = path.resolve(localPath);
   const manifest = readManifest(root);
@@ -811,6 +863,33 @@ export function locateLocalFile(file) {
 export function workspaceRefForLocalFile(file) {
   const hit = locateLocalFile(file);
   return hit?.known ? `${hit.manifest.source.driveId}|${hit.known.itemId}` : null;
+}
+
+export const lock = (a) => serial(a.localPath, () => lockImpl(a));
+export const release = (a) => serial(a.localPath, () => releaseImpl(a));
+export const pull = (a = {}) => serial(a.localPath, () => pullImpl(a));
+export const merge = (a) => serial(a.localPath, () => mergeImpl(a));
+export const push = (a) => serial(a.localPath, () => pushImpl(a));
+export const move = (a) => serial(a.localPath, () => moveImpl(a));
+
+/** Files checked out to you in one synced folder: when, and whether you changed them. */
+export function locks(localPath) {
+  const root = path.resolve(localPath);
+  const manifest = readManifest(root);
+  return Object.entries(manifest.files).filter(([, k]) => k.lock).map(([rel, k]) => {
+    const full = abs(root, rel);
+    return { file: rel, at: k.lock.at, merging: !!k.merge, edited: fs.existsSync(full) && hashFile(full) !== k.hash };
+  });
+}
+
+/** The synced folder (its root) that contains a path, or null. */
+export function workspaceRootOf(p) {
+  let dir = path.resolve(p);
+  while (dir !== path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, MANIFEST))) return dir;
+    dir = path.dirname(dir);
+  }
+  return null;
 }
 
 export { enc };
